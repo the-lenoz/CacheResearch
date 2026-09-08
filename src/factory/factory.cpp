@@ -1,3 +1,3 @@
 module cache.factory;
 
-// TODO: Implement make_cache.
+// make_cache is a template, so its implementation lives in the module interface.

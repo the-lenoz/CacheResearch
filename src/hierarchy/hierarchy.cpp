@@ -1,3 +1,3 @@
 module cache.hierarchy;
 
-// TODO: Implement CacheHierarchy.
+// CacheHierarchy is a template, so its implementation lives in the module interface.

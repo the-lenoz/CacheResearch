@@ -1,3 +1,3 @@
 module cache.lru;
 
-// TODO: Implement LRUCache.
+// LRUCache is a template, so its implementation lives in the module interface.

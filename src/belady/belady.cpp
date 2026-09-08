@@ -1,3 +1,3 @@
 module cache.belady;
 
-// TODO: Implement BeladyCache.
+// BeladyCache is a template, so its implementation lives in the module interface.

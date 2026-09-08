@@ -13,6 +13,7 @@ if(NOT GTest_FOUND)
 endif()
 
 add_executable(cache_tests
+    cache_test.cpp
     lru_test.cpp
     lfu_test.cpp
     two_q_test.cpp

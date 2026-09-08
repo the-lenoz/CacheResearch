@@ -16,7 +16,7 @@ export struct Config {
 
 export struct Input {
     std::size_t cache_size{};
-    std::vector<Key> requests;
+    std::vector<DefaultKey> requests;
 };
 
 export [[nodiscard]] Config parse_config(std::string_view path);
