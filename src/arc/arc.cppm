@@ -1,0 +1,22 @@
+module;
+
+#include <cstddef>
+#include <optional>
+
+export module cache.arc;
+
+import cache;
+
+export class ARCCache final : public Cache {
+public:
+    explicit ARCCache(std::size_t capacity);
+
+    [[nodiscard]] bool contains(Key key) const override;
+    void touch(Key key) override;
+    [[nodiscard]] std::optional<Key> insert(Key key) override;
+    void erase(Key key) override;
+    void clear() override;
+
+    [[nodiscard]] std::size_t size() const override;
+    [[nodiscard]] std::size_t capacity() const override;
+};

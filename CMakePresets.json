@@ -1,0 +1,64 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CACHE_RESEARCH_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CACHE_RESEARCH_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "debug-tests",
+      "displayName": "Debug with tests",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/debug-tests",
+      "cacheVariables": {
+        "CACHE_RESEARCH_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug-tests",
+      "configurePreset": "debug-tests"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug-tests",
+      "configurePreset": "debug-tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
