@@ -43,7 +43,9 @@ int main(int argc, char** argv) {
 
         CacheHierarchy<DefaultKey, DefaultValue> hierarchy{std::move(levels)};
         for (const DefaultKey key : input.requests) {
-            static_cast<void>(hierarchy.access({key, {}}));
+            if (hierarchy.access(key) == nullptr) {
+                hierarchy.insert({key, {}});
+            }
         }
 
         std::cout << hierarchy.hits() << '\n';

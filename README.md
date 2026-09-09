@@ -1,6 +1,6 @@
 # CacheResearch
 
-A C++20 modules project for researching cache replacement policies.
+A project for researching cache replacement policies.
 
 Implemented policies:
 
@@ -38,6 +38,28 @@ Input format:
 <cache_size> <request_count>
 <request_1> ... <request_n>
 ```
+
+## Hierarchy API
+
+Lookup and cache filling are separate operations. `access(key)` updates the
+replacement policy and promotes a hit to L1, but does not insert anything on a
+miss. `insert(entry)` explicitly fills L1 and cascades evictions through lower
+levels:
+
+```cpp
+if (auto* cached = hierarchy.access(key)) {
+    return *cached;
+}
+
+auto value = load_from_storage(key);
+hierarchy.insert({key, value});
+return value;
+```
+
+`find(key)` only observes the currently stored value. It does not count a hit,
+change replacement-policy state, or promote an entry. Pointers returned by
+`access()` and `find()` should be treated as invalid after the next mutating
+operation on the hierarchy.
 
 ## Tests
 
