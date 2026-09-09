@@ -37,6 +37,14 @@ public:
     [[nodiscard]] virtual std::size_t size() const = 0;
     [[nodiscard]] virtual std::size_t capacity() const = 0;
 
+    [[nodiscard]] virtual std::size_t shadow_size() const {
+        return 0;
+    }
+
+    [[nodiscard]] virtual std::size_t shadow_capacity() const {
+        return 0;
+    }
+
     [[nodiscard]] bool contains(const key_type& key) const {
         return find(key) != nullptr;
     }

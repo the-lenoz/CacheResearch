@@ -51,3 +51,20 @@ TEST(LIRSCache, ExtractsValuesAndHandlesZeroCapacity) {
     EXPECT_TRUE(empty.insert({2, "two"}).has_value());
     EXPECT_EQ(empty.size(), 0);
 }
+
+TEST(LIRSCache, LimitsNonResidentHIRHistory) {
+    LIRSCache<int, std::string> cache{2, 1};
+
+    for (int key = 1; key <= 8; ++key) {
+        static_cast<void>(cache.insert({key, std::to_string(key)}));
+        EXPECT_LE(cache.shadow_size(), 1);
+    }
+
+    EXPECT_EQ(cache.shadow_capacity(), 1);
+
+    LIRSCache<int, std::string> without_shadow{2, 0};
+    for (int key = 1; key <= 4; ++key) {
+        static_cast<void>(without_shadow.insert({key, std::to_string(key)}));
+    }
+    EXPECT_EQ(without_shadow.shadow_size(), 0);
+}

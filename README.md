@@ -64,8 +64,11 @@ python3 scripts/generate_workloads.py --clean
 
 Available patterns are `loop`, `scan`, `uniform`, `normal`, `hotset`,
 `hot_scan`, `phase_change`, and `zipf`. Cache sizes, request counts, seeds, and
-selected patterns can be changed through command-line options; use `--help` for
-the full list.
+selected patterns can be changed through command-line options. The generator
+assumes three hierarchy levels by default; pass matching `--levels` when
+benchmarking another depth. `loop` and every `phase_change` phase use a working
+set of `cache_size * levels + 1`, so the complete hierarchy cannot contain it.
+Use `--help` for the full option list.
 
 Run every generated configuration against every workload:
 
@@ -85,3 +88,15 @@ The complete pipeline is also available as a CMake target:
 ```bash
 cmake --build --preset release --target benchmark
 ```
+
+## Shadow-history limits
+
+2Q, ARC, and LIRS accept `max_shadow_items` as the second constructor argument.
+Their common `Cache` interface exposes `shadow_size()` and `shadow_capacity()`;
+LRU and LFU report zero for both. The factory accepts the same limit as its
+optional third argument. This allows a caller to enforce a future combined
+budget by choosing `resident_capacity + shadow_capacity <= total_budget`.
+
+Current policy defaults are explicitly marked with `TODO(tuning)` next to the
+hard-coded heuristics: A1in/A1out shares in 2Q, ARC history/recency settings,
+and resident-HIR/history settings in LIRS.

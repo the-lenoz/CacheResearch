@@ -26,3 +26,13 @@ TEST(CacheFactory, RejectsUnknownPolicy) {
         std::invalid_argument
     );
 }
+
+TEST(CacheFactory, PassesExplicitShadowLimitToHistoryBasedPolicies) {
+    const auto two_q = make_cache<int, std::string>("2Q", 8, 2);
+    const auto arc = make_cache<int, std::string>("ARC", 8, 3);
+    const auto lirs = make_cache<int, std::string>("LIRS", 8, 4);
+
+    EXPECT_EQ(two_q->shadow_capacity(), 2);
+    EXPECT_EQ(arc->shadow_capacity(), 3);
+    EXPECT_EQ(lirs->shadow_capacity(), 4);
+}

@@ -23,11 +23,14 @@ class LIRSCache final : public Cache<KeyType, ValueType> {
 public:
     using entry_type = CacheEntry<KeyType, ValueType>;
 
+    // TODO(tuning): expose the default non-resident HIR budget through config files.
     explicit LIRSCache(std::size_t capacity)
+        : LIRSCache(capacity, capacity) {}
+
+    LIRSCache(std::size_t capacity, std::size_t max_shadow_items)
         : capacity_(capacity),
-          lir_capacity_(capacity == 0
-              ? 0
-              : capacity - std::max<std::size_t>(1, capacity / 100)) {}
+          lir_capacity_(default_lir_capacity(capacity)),
+          shadow_capacity_(max_shadow_items) {}
 
     [[nodiscard]] ValueType* find(const KeyType& key) override {
         const auto found = entries_.find(key);
@@ -85,17 +88,21 @@ public:
             return std::optional<entry_type>{std::move(entry)};
         }
 
-        std::optional<entry_type> evicted;
-        if (resident_count_ == capacity_) {
-            evicted = evict_resident_hir();
-        }
-
         const auto history = entries_.find(entry.key);
         if (history != entries_.end()) {
             history->second.value.emplace(std::move(entry.value));
             ++resident_count_;
+            std::optional<entry_type> evicted;
+            if (resident_count_ > capacity_) {
+                evicted = evict_resident_hir();
+            }
             touch(history->first);
             return evicted;
+        }
+
+        std::optional<entry_type> evicted;
+        if (resident_count_ == capacity_) {
+            evicted = evict_resident_hir();
         }
 
         const bool make_lir = lir_count_ < lir_capacity_;
@@ -167,6 +174,14 @@ public:
         return capacity_;
     }
 
+    [[nodiscard]] std::size_t shadow_size() const override {
+        return entries_.size() - resident_count_;
+    }
+
+    [[nodiscard]] std::size_t shadow_capacity() const override {
+        return shadow_capacity_;
+    }
+
 private:
     using KeyList = std::list<KeyType>;
 
@@ -178,6 +193,14 @@ private:
         bool in_queue = false;
         typename KeyList::iterator queue_position{};
     };
+
+    // TODO(tuning): expose the resident HIR share (currently 1%, at least one)
+    // through policy configuration.
+    [[nodiscard]] static std::size_t default_lir_capacity(std::size_t capacity) {
+        return capacity == 0
+            ? 0
+            : capacity - std::max<std::size_t>(1, capacity / 100);
+    }
 
     void move_to_stack_front(const KeyType& key, Node& node) {
         if (node.in_stack) {
@@ -247,6 +270,30 @@ private:
         }
     }
 
+    void trim_shadow_history() {
+        while (shadow_size() > shadow_capacity_) {
+            // TODO(tuning): make the oldest-shadow removal strategy configurable.
+            auto shadow_position = stack_.end();
+            for (auto position = stack_.end(); position != stack_.begin();) {
+                --position;
+                const auto found = entries_.find(*position);
+                if (found != entries_.end() && !found->second.value) {
+                    shadow_position = position;
+                    break;
+                }
+            }
+
+            if (shadow_position == stack_.end()) {
+                break;
+            }
+
+            const auto shadow = entries_.find(*shadow_position);
+            shadow->second.in_stack = false;
+            stack_.erase(shadow_position);
+            entries_.erase(shadow);
+        }
+    }
+
     [[nodiscard]] std::optional<entry_type> evict_resident_hir() {
         if (queue_.empty()) {
             return evict_bottom_lir();
@@ -262,6 +309,7 @@ private:
         if (!found->second.in_stack) {
             entries_.erase(found);
         }
+        trim_shadow_history();
         return std::optional<entry_type>{std::move(evicted)};
     }
 
@@ -285,6 +333,7 @@ private:
 
     std::size_t capacity_;
     std::size_t lir_capacity_;
+    std::size_t shadow_capacity_;
     std::size_t resident_count_ = 0;
     std::size_t lir_count_ = 0;
     KeyList stack_;

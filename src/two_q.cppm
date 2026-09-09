@@ -24,9 +24,12 @@ public:
     using entry_type = CacheEntry<KeyType, ValueType>;
 
     explicit TwoQCache(std::size_t capacity)
+        : TwoQCache(capacity, default_shadow_capacity(capacity)) {}
+
+    TwoQCache(std::size_t capacity, std::size_t max_shadow_items)
         : capacity_(capacity),
-          a1in_capacity_(capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 4)),
-          a1out_capacity_(capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 2)) {}
+          a1in_capacity_(default_a1in_capacity(capacity)),
+          a1out_capacity_(max_shadow_items) {}
 
     [[nodiscard]] ValueType* find(const KeyType& key) override {
         const auto found = resident_.find(key);
@@ -123,6 +126,14 @@ public:
         return capacity_;
     }
 
+    [[nodiscard]] std::size_t shadow_size() const override {
+        return a1out_.size();
+    }
+
+    [[nodiscard]] std::size_t shadow_capacity() const override {
+        return a1out_capacity_;
+    }
+
 private:
     using KeyList = std::list<KeyType>;
 
@@ -136,6 +147,16 @@ private:
         Queue queue;
         typename KeyList::iterator position;
     };
+
+    // TODO(tuning): expose the A1in share through policy configuration.
+    [[nodiscard]] static std::size_t default_a1in_capacity(std::size_t capacity) {
+        return capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 4);
+    }
+
+    // TODO(tuning): expose the default A1out history share through config files.
+    [[nodiscard]] static std::size_t default_shadow_capacity(std::size_t capacity) {
+        return capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 2);
+    }
 
     void remember_ghost(const KeyType& key) {
         if (a1out_capacity_ == 0) {

@@ -3,6 +3,7 @@ module;
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,7 +25,8 @@ export template <
 >
 [[nodiscard]] std::unique_ptr<Cache<KeyType, ValueType>> make_cache(
     std::string_view policy,
-    std::size_t capacity
+    std::size_t capacity,
+    std::optional<std::size_t> shadow_capacity = std::nullopt
 ) {
     if (policy == "LRU") {
         return std::make_unique<LRUCache<KeyType, ValueType, Hash, KeyEqual>>(
@@ -37,16 +39,34 @@ export template <
         );
     }
     if (policy == "2Q") {
+        if (shadow_capacity) {
+            return std::make_unique<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>(
+                capacity,
+                *shadow_capacity
+            );
+        }
         return std::make_unique<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>(
             capacity
         );
     }
     if (policy == "ARC") {
+        if (shadow_capacity) {
+            return std::make_unique<ARCCache<KeyType, ValueType, Hash, KeyEqual>>(
+                capacity,
+                *shadow_capacity
+            );
+        }
         return std::make_unique<ARCCache<KeyType, ValueType, Hash, KeyEqual>>(
             capacity
         );
     }
     if (policy == "LIRS") {
+        if (shadow_capacity) {
+            return std::make_unique<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>(
+                capacity,
+                *shadow_capacity
+            );
+        }
         return std::make_unique<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>(
             capacity
         );

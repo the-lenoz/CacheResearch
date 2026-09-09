@@ -23,8 +23,12 @@ class ARCCache final : public Cache<KeyType, ValueType> {
 public:
     using entry_type = CacheEntry<KeyType, ValueType>;
 
+    // TODO(tuning): expose the default ARC history budget through config files.
     explicit ARCCache(std::size_t capacity)
-        : capacity_(capacity) {}
+        : ARCCache(capacity, capacity) {}
+
+    ARCCache(std::size_t capacity, std::size_t max_shadow_items)
+        : capacity_(capacity), shadow_capacity_(max_shadow_items) {}
 
     [[nodiscard]] ValueType* find(const KeyType& key) override {
         const auto found = resident_.find(key);
@@ -167,6 +171,14 @@ public:
         return capacity_;
     }
 
+    [[nodiscard]] std::size_t shadow_size() const override {
+        return b1_.size() + b2_.size();
+    }
+
+    [[nodiscard]] std::size_t shadow_capacity() const override {
+        return shadow_capacity_;
+    }
+
 private:
     using KeyList = std::list<KeyType>;
     using GhostIndex = std::unordered_map<
@@ -244,7 +256,8 @@ private:
     }
 
     void trim_history() {
-        while (b1_.size() + b2_.size() > capacity_) {
+        while (b1_.size() + b2_.size() > shadow_capacity_) {
+            // TODO(tuning): make the B1/B2 history trimming preference configurable.
             if (!b2_.empty() && b2_.size() > target_t1_size_) {
                 remove_oldest_ghost(b2_, b2_index_);
             } else if (!b1_.empty()) {
@@ -256,6 +269,8 @@ private:
     }
 
     std::size_t capacity_;
+    std::size_t shadow_capacity_;
+    // TODO(tuning): expose ARC's initial recency target through policy configuration.
     std::size_t target_t1_size_ = 0;
     KeyList t1_;
     KeyList t2_;

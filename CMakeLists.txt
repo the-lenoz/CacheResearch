@@ -15,26 +15,17 @@ set_target_properties(cache_lib PROPERTIES
 target_sources(cache_lib
     PUBLIC
         FILE_SET CXX_MODULES FILES
-            src/cache/cache.cppm
-            src/lru/lru.cppm
-            src/lfu/lfu.cppm
-            src/two_q/two_q.cppm
-            src/arc/arc.cppm
-            src/lirs/lirs.cppm
-            src/belady/belady.cppm
-            src/hierarchy/hierarchy.cppm
-            src/factory/factory.cppm
+            src/cache.cppm
+            src/lru.cppm
+            src/lfu.cppm
+            src/two_q.cppm
+            src/arc.cppm
+            src/lirs.cppm
+            src/belady.cppm
+            src/hierarchy.cppm
+            src/factory.cppm
             src/config/config.cppm
     PRIVATE
-        src/cache/cache.cpp
-        src/lru/lru.cpp
-        src/lfu/lfu.cpp
-        src/two_q/two_q.cpp
-        src/arc/arc.cpp
-        src/lirs/lirs.cpp
-        src/belady/belady.cpp
-        src/hierarchy/hierarchy.cpp
-        src/factory/factory.cpp
         src/config/config.cpp
 )
 
