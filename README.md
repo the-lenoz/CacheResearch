@@ -6,9 +6,12 @@ Implemented policies:
 
 - LRU;
 - LFU with LRU tie-breaking;
+- 2Q;
+- ARC;
+- LIRS;
 - Belady optimal offline cache.
 
-LRU and LFU can be combined into an exclusive multi-level hierarchy. Cache
+Online policies can be combined into an exclusive multi-level hierarchy. Cache
 interfaces are templated by key and value type, while the CLI simulator uses
 `int` keys and an empty payload.
 
@@ -26,8 +29,8 @@ The program prints the total number of cache hits:
 2
 ```
 
-Use `configs/lru.conf`, `configs/lfu.conf`, or a multi-level config such as
-`configs/lru_lfu.conf` to run online policies through the same command.
+Use a policy config from `configs/`, including multi-level configurations, to
+run online policies through the same command.
 
 Input format:
 
@@ -42,4 +45,43 @@ Input format:
 cmake --preset debug-tests
 cmake --build --preset debug-tests
 ctest --preset debug-tests
+```
+
+## Workload generation and benchmarks
+
+Generate all `5^3 = 125` ordered three-level configurations (repeated policies
+are allowed):
+
+```bash
+python3 scripts/generate_configs.py --clean
+```
+
+Generate workloads grouped by pattern under `workloads/generated/`:
+
+```bash
+python3 scripts/generate_workloads.py --clean
+```
+
+Available patterns are `loop`, `scan`, `uniform`, `normal`, `hotset`,
+`hot_scan`, `phase_change`, and `zipf`. Cache sizes, request counts, seeds, and
+selected patterns can be changed through command-line options; use `--help` for
+the full list.
+
+Run every generated configuration against every workload:
+
+```bash
+python3 scripts/benchmark.py
+```
+
+Detailed results are written to `results/benchmark.csv`; the best configuration
+for each workload is written to `results/best_by_workload.csv`, and the best
+aggregate configuration for each pattern is written to
+`results/best_by_pattern.csv`. The benchmark also runs Belady with total
+hierarchy capacity (`level_count * cache_size`) and reports each configuration's
+percentage of the ideal hit count.
+
+The complete pipeline is also available as a CMake target:
+
+```bash
+cmake --build --preset release --target benchmark
 ```

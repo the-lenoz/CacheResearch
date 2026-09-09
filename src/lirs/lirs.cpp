@@ -1,3 +1,3 @@
 module cache.lirs;
 
-// TODO: Implement LIRSCache.
+// LIRSCache is a template, so its implementation lives in the module interface.

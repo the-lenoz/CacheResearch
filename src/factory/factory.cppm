@@ -10,8 +10,11 @@ module;
 export module cache.factory;
 
 import cache;
+import cache.arc;
 import cache.lfu;
+import cache.lirs;
 import cache.lru;
+import cache.two_q;
 
 export template <
     typename KeyType,
@@ -30,6 +33,21 @@ export template <
     }
     if (policy == "LFU") {
         return std::make_unique<LFUCache<KeyType, ValueType, Hash, KeyEqual>>(
+            capacity
+        );
+    }
+    if (policy == "2Q") {
+        return std::make_unique<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>(
+            capacity
+        );
+    }
+    if (policy == "ARC") {
+        return std::make_unique<ARCCache<KeyType, ValueType, Hash, KeyEqual>>(
+            capacity
+        );
+    }
+    if (policy == "LIRS") {
+        return std::make_unique<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>(
             capacity
         );
     }

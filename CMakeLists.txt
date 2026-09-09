@@ -46,6 +46,39 @@ set_target_properties(cache_sim PROPERTIES
 )
 target_link_libraries(cache_sim PRIVATE cache_lib)
 
+find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+
+if(Python3_Interpreter_FOUND)
+    add_custom_target(generate_configs
+        COMMAND
+            ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/generate_configs.py
+            --clean
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        COMMENT "Generating three-level cache configurations"
+        VERBATIM
+    )
+
+    add_custom_target(generate_workloads
+        COMMAND
+            ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/generate_workloads.py
+            --clean
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        COMMENT "Generating categorized cache workloads"
+        VERBATIM
+    )
+
+    add_custom_target(benchmark
+        COMMAND
+            ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/benchmark.py
+            --executable $<TARGET_FILE:cache_sim>
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        DEPENDS cache_sim generate_configs generate_workloads
+        COMMENT "Benchmarking every generated configuration"
+        USES_TERMINAL
+        VERBATIM
+    )
+endif()
+
 if(CACHE_RESEARCH_BUILD_TESTS)
     include(CTest)
     add_subdirectory(tests)

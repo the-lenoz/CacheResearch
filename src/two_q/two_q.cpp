@@ -1,3 +1,3 @@
 module cache.two_q;
 
-// TODO: Implement TwoQCache.
+// TwoQCache is a template, so its implementation lives in the module interface.
