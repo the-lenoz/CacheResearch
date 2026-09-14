@@ -23,12 +23,17 @@ class ARCCache final : public Cache<KeyType, ValueType> {
 public:
     using entry_type = CacheEntry<KeyType, ValueType>;
 
-    // TODO(tuning): expose the default ARC history budget through config files.
     explicit ARCCache(std::size_t capacity)
-        : ARCCache(capacity, capacity) {}
+        : ARCCache(capacity, default_shadow_capacity(capacity)) {}
 
     ARCCache(std::size_t capacity, std::size_t max_shadow_items)
         : capacity_(capacity), shadow_capacity_(max_shadow_items) {}
+
+    [[nodiscard]] static constexpr std::size_t default_shadow_capacity(
+        std::size_t capacity
+    ) {
+        return capacity;
+    }
 
     [[nodiscard]] ValueType* find(const KeyType& key) override {
         const auto found = resident_.find(key);

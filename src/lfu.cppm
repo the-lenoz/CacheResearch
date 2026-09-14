@@ -149,8 +149,8 @@ private:
 
     struct StoredValue {
         ValueType value;
-        typename BucketList::iterator bucket;
-        typename KeyList::iterator position;
+        BucketList::iterator bucket;
+        KeyList::iterator position;
     };
 
     std::size_t capacity_;

@@ -18,6 +18,7 @@ build/
 
 # IPython data
 .venv/
+/.ipynb_checkpoints/
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
@@ -26,3 +27,4 @@ build/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 cmake-build-*/
+

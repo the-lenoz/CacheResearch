@@ -32,6 +32,14 @@ The program prints the total number of cache hits:
 Use a policy config from `configs/`, including multi-level configurations, to
 run online policies through the same command.
 
+By default, the configured capacity limits resident items and shadow history is
+additional. Use a shared logical byte budget for resident and shadow items with:
+
+```bash
+printf '16 6\n1 2 3 1 2 3\n' \
+  | ./build/debug/cache_sim --capacity-includes-shadow configs/arc.conf
+```
+
 Input format:
 
 ```text
@@ -103,7 +111,14 @@ for each workload is written to `results/best_by_workload.csv`, and the best
 aggregate configuration for each pattern is written to
 `results/best_by_pattern.csv`. The benchmark also runs Belady with total
 hierarchy capacity (`level_count * cache_size`) and reports each configuration's
-percentage of the ideal hit count.
+percentage of the ideal hit count. Configurations containing 2Q, ARC, or LIRS
+are run twice: `resident_only` preserves the legacy resident capacity and
+`resident_and_shadow` applies `--capacity-includes-shadow`. The
+`capacity_mode` CSV column distinguishes these variants. Use
+`--value-bytes current 64 256 1024` to add a logical payload-size dimension;
+the selected value is written to `value_bytes`. `current` uses the compiled
+`sizeof(DefaultValue)`. `--config-names` can restrict a focused experiment to
+specific config paths relative to `--configs`.
 
 The complete pipeline is also available as a CMake target:
 
@@ -116,9 +131,28 @@ cmake --build --preset release --target benchmark
 2Q, ARC, and LIRS accept `max_shadow_items` as the second constructor argument.
 Their common `Cache` interface exposes `shadow_size()` and `shadow_capacity()`;
 LRU and LFU report zero for both. The factory accepts the same limit as its
-optional third argument. This allows a caller to enforce a future combined
-budget by choosing `resident_capacity + shadow_capacity <= total_budget`.
+optional third argument.
+
+`CapacityAccounting::resident_and_shadow` treats the configured capacity as a
+logical byte budget of
+`capacity * (sizeof(KeyType) + sizeof(ValueType))`. It selects the largest
+resident capacity that preserves the policy's default shadow ratio while
+satisfying:
+
+```text
+resident_capacity * (sizeof(KeyType) + sizeof(ValueType))
+    + shadow_capacity * sizeof(KeyType)
+    <= configured logical byte budget
+```
+
+This intentionally counts logical key/value payload only, not allocator,
+container-node, or hash-table overhead. A one-item budget prioritizes one
+resident item and disables shadow history. CLI option `--value-bytes N`
+overrides only the logical value size used by this planner; the trace runner
+continues to use `DefaultValue` as its actual payload.
 
 Current policy defaults are explicitly marked with `TODO(tuning)` next to the
-hard-coded heuristics: A1in/A1out shares in 2Q, ARC history/recency settings,
-and resident-HIR/history settings in LIRS.
+still hard-coded algorithmic heuristics: the A1in share in 2Q, ARC's initial
+recency target and history trimming preference, and the resident-HIR share and
+history removal strategy in LIRS. Shadow capacity itself is already
+configurable and is not marked as pending work.

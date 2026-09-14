@@ -23,14 +23,19 @@ class LIRSCache final : public Cache<KeyType, ValueType> {
 public:
     using entry_type = CacheEntry<KeyType, ValueType>;
 
-    // TODO(tuning): expose the default non-resident HIR budget through config files.
     explicit LIRSCache(std::size_t capacity)
-        : LIRSCache(capacity, capacity) {}
+        : LIRSCache(capacity, default_shadow_capacity(capacity)) {}
 
     LIRSCache(std::size_t capacity, std::size_t max_shadow_items)
         : capacity_(capacity),
           lir_capacity_(default_lir_capacity(capacity)),
           shadow_capacity_(max_shadow_items) {}
+
+    [[nodiscard]] static constexpr std::size_t default_shadow_capacity(
+        std::size_t capacity
+    ) {
+        return capacity;
+    }
 
     [[nodiscard]] ValueType* find(const KeyType& key) override {
         const auto found = entries_.find(key);
@@ -189,9 +194,9 @@ private:
         std::optional<ValueType> value;
         bool is_lir = false;
         bool in_stack = false;
-        typename KeyList::iterator stack_position{};
+        KeyList::iterator stack_position{};
         bool in_queue = false;
-        typename KeyList::iterator queue_position{};
+        KeyList::iterator queue_position{};
     };
 
     // TODO(tuning): expose the resident HIR share (currently 1%, at least one)

@@ -13,6 +13,10 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SHADOW_POLICIES = frozenset({"2Q", "ARC", "LIRS"})
+RESIDENT_ONLY = "resident_only"
+RESIDENT_AND_SHADOW = "resident_and_shadow"
+CURRENT_VALUE_BYTES = "current"
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,16 @@ def positive_float(value: str) -> float:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be positive")
     return parsed
+
+
+def value_bytes_argument(value: str) -> int | None:
+    if value == CURRENT_VALUE_BYTES:
+        return None
+    return positive_integer(value)
+
+
+def value_bytes_label(value: int | None) -> str:
+    return CURRENT_VALUE_BYTES if value is None else str(value)
 
 
 def relative_name(path: Path, root: Path) -> str:
@@ -122,13 +136,24 @@ def run_simulation(
     workload: Workload,
     timeout: float,
     capacity_override: int | None = None,
+    capacity_mode: str = RESIDENT_ONLY,
+    value_bytes: int | None = None,
 ) -> ExecutionResult:
+    command = [str(executable)]
+    if capacity_mode == RESIDENT_AND_SHADOW:
+        command.append("--capacity-includes-shadow")
+    elif capacity_mode != RESIDENT_ONLY:
+        return ExecutionResult(None, 0.0, f"unknown capacity mode: {capacity_mode}")
+    if value_bytes is not None:
+        command.extend(("--value-bytes", str(value_bytes)))
+    command.append(str(config))
+
     started = time.perf_counter()
     try:
         if capacity_override is None:
             with workload.path.open("r", encoding="utf-8") as input_stream:
                 process = subprocess.run(
-                    [str(executable), str(config)],
+                    command,
                     stdin=input_stream,
                     capture_output=True,
                     text=True,
@@ -137,7 +162,7 @@ def run_simulation(
                 )
         else:
             process = subprocess.run(
-                [str(executable), str(config)],
+                command,
                 input=input_with_capacity(workload, capacity_override),
                 capture_output=True,
                 text=True,
@@ -217,6 +242,23 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="skip the ideal-cache baseline",
     )
+    parser.add_argument(
+        "--value-bytes",
+        nargs="+",
+        type=value_bytes_argument,
+        default=[None],
+        metavar="BYTES",
+        help=(
+            "logical value sizes to benchmark; use 'current' for sizeof(DefaultValue) "
+            "(default: current)"
+        ),
+    )
+    parser.add_argument(
+        "--config-names",
+        nargs="+",
+        metavar="NAME",
+        help="benchmark only configs with these paths relative to --configs",
+    )
     parser.add_argument("--jobs", type=positive_integer, default=default_jobs)
     parser.add_argument("--timeout", type=positive_float, default=30.0)
     return parser.parse_args()
@@ -239,6 +281,15 @@ def main() -> int:
         )
 
     configs = load_configs(arguments.configs)
+    if arguments.config_names:
+        requested_names = set(arguments.config_names)
+        available_names = {config.name for config in configs}
+        missing_names = sorted(requested_names - available_names)
+        if missing_names:
+            raise SystemExit(
+                "requested configs not found: " + ", ".join(missing_names)
+            )
+        configs = [config for config in configs if config.name in requested_names]
     workloads = load_workloads(arguments.workloads)
     if not configs:
         raise SystemExit(f"no online configs found in {arguments.configs}")
@@ -260,10 +311,23 @@ def main() -> int:
                     capacity_override=workload.cache_size * levels,
                 )
 
-    tasks = [(workload, config) for workload in workloads for config in configs]
+    value_sizes = list(dict.fromkeys(arguments.value_bytes))
+    tasks = [
+        (workload, config, capacity_mode, value_bytes)
+        for workload in workloads
+        for config in configs
+        for value_bytes in value_sizes
+        for capacity_mode in (
+            (RESIDENT_ONLY, RESIDENT_AND_SHADOW)
+            if any(policy in SHADOW_POLICIES for policy in config.policies)
+            else (RESIDENT_ONLY,)
+        )
+    ]
     completed = 0
     progress_step = max(1, len(tasks) // 20)
-    executions: list[tuple[Workload, CacheConfig, ExecutionResult]] = []
+    executions: list[
+        tuple[Workload, CacheConfig, str, int | None, ExecutionResult]
+    ] = []
 
     with ThreadPoolExecutor(max_workers=arguments.jobs) as executor:
         pending = {
@@ -273,20 +337,31 @@ def main() -> int:
                 config.path,
                 workload,
                 arguments.timeout,
-            ): (workload, config)
-            for workload, config in tasks
+                capacity_mode=capacity_mode,
+                value_bytes=value_bytes,
+            ): (workload, config, capacity_mode, value_bytes)
+            for workload, config, capacity_mode, value_bytes in tasks
         }
         for future in as_completed(pending):
-            workload, config = pending[future]
-            executions.append((workload, config, future.result()))
+            workload, config, capacity_mode, value_bytes = pending[future]
+            executions.append(
+                (workload, config, capacity_mode, value_bytes, future.result())
+            )
             completed += 1
             if completed % progress_step == 0 or completed == len(tasks):
                 print(f"completed {completed}/{len(tasks)} runs")
 
-    executions.sort(key=lambda item: (item[0].name, item[1].name))
+    executions.sort(
+        key=lambda item: (
+            item[0].name,
+            item[1].name,
+            value_bytes_label(item[3]),
+            item[2],
+        )
+    )
     rows = []
     failed = 0
-    for workload, config, execution in executions:
+    for workload, config, capacity_mode, value_bytes, execution in executions:
         ideal = ideal_results.get((workload.path, config.levels))
         hits = execution.hits
         ideal_hits = ideal.hits if ideal else None
@@ -321,6 +396,8 @@ def main() -> int:
                 "config": config.name,
                 "levels": config.levels,
                 "policies": ">".join(config.policies),
+                "capacity_mode": capacity_mode,
+                "value_bytes": value_bytes_label(value_bytes),
                 "hits": "" if hits is None else hits,
                 "misses": "" if hits is None else workload.request_count - hits,
                 "hit_rate": "" if hit_rate is None else f"{hit_rate:.8f}",
@@ -341,28 +418,37 @@ def main() -> int:
     write_csv(arguments.output, rows, fields)
 
     successful = [row for row in rows if row["status"] == "ok"]
-    best_by_workload: dict[str, dict[str, object]] = {}
+    best_by_workload: dict[tuple[str, str], dict[str, object]] = {}
     for row in successful:
-        previous = best_by_workload.get(str(row["workload"]))
+        summary_key = (str(row["workload"]), str(row["value_bytes"]))
+        previous = best_by_workload.get(summary_key)
         is_better = previous is None or int(row["hits"]) > int(previous["hits"])
         is_stable_tie_winner = (
             previous is not None
             and int(row["hits"]) == int(previous["hits"])
-            and str(row["config"]) < str(previous["config"])
+            and (str(row["config"]), str(row["capacity_mode"]))
+            < (str(previous["config"]), str(previous["capacity_mode"]))
         )
         if is_better or is_stable_tie_winner:
-            best_by_workload[str(row["workload"])] = row
-    summary_rows = [best_by_workload[name] for name in sorted(best_by_workload)]
+            best_by_workload[summary_key] = row
+    summary_rows = [best_by_workload[key] for key in sorted(best_by_workload)]
     write_csv(arguments.summary, summary_rows, fields)
 
-    aggregates: dict[tuple[str, str], dict[str, object]] = {}
+    aggregates: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for row in successful:
-        key = (str(row["pattern"]), str(row["config"]))
+        key = (
+            str(row["pattern"]),
+            str(row["config"]),
+            str(row["capacity_mode"]),
+            str(row["value_bytes"]),
+        )
         aggregate = aggregates.setdefault(
             key,
             {
                 "pattern": row["pattern"],
                 "config": row["config"],
+                "capacity_mode": row["capacity_mode"],
+                "value_bytes": row["value_bytes"],
                 "levels": row["levels"],
                 "policies": row["policies"],
                 "workloads": 0,
@@ -401,24 +487,28 @@ def main() -> int:
             }
         )
 
-    best_by_pattern: dict[str, dict[str, object]] = {}
+    best_by_pattern: dict[tuple[str, str], dict[str, object]] = {}
     for row in aggregate_rows:
         pattern = str(row["pattern"])
-        previous = best_by_pattern.get(pattern)
+        pattern_key = (pattern, str(row["value_bytes"]))
+        previous = best_by_pattern.get(pattern_key)
         is_better = previous is None or float(row["hit_rate"]) > float(
             previous["hit_rate"]
         )
         is_stable_tie_winner = (
             previous is not None
             and float(row["hit_rate"]) == float(previous["hit_rate"])
-            and str(row["config"]) < str(previous["config"])
+            and (str(row["config"]), str(row["capacity_mode"]))
+            < (str(previous["config"]), str(previous["capacity_mode"]))
         )
         if is_better or is_stable_tie_winner:
-            best_by_pattern[pattern] = row
+            best_by_pattern[pattern_key] = row
 
     pattern_fields = [
         "pattern",
         "config",
+        "capacity_mode",
+        "value_bytes",
         "levels",
         "policies",
         "workloads",
@@ -429,7 +519,7 @@ def main() -> int:
         "percent_of_ideal",
         "total_seconds",
     ]
-    pattern_rows = [best_by_pattern[name] for name in sorted(best_by_pattern)]
+    pattern_rows = [best_by_pattern[key] for key in sorted(best_by_pattern)]
     write_csv(arguments.pattern_summary, pattern_rows, pattern_fields)
 
     print(f"wrote {len(rows)} rows to {arguments.output}")

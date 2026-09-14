@@ -31,6 +31,12 @@ public:
           a1in_capacity_(default_a1in_capacity(capacity)),
           a1out_capacity_(max_shadow_items) {}
 
+    [[nodiscard]] static constexpr std::size_t default_shadow_capacity(
+        std::size_t capacity
+    ) {
+        return capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 2);
+    }
+
     [[nodiscard]] ValueType* find(const KeyType& key) override {
         const auto found = resident_.find(key);
         return found == resident_.end() ? nullptr : &found->second.value;
@@ -145,17 +151,12 @@ private:
     struct StoredValue {
         ValueType value;
         Queue queue;
-        typename KeyList::iterator position;
+        KeyList::iterator position;
     };
 
     // TODO(tuning): expose the A1in share through policy configuration.
     [[nodiscard]] static std::size_t default_a1in_capacity(std::size_t capacity) {
         return capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 4);
-    }
-
-    // TODO(tuning): expose the default A1out history share through config files.
-    [[nodiscard]] static std::size_t default_shadow_capacity(std::size_t capacity) {
-        return capacity == 0 ? 0 : std::max<std::size_t>(1, capacity / 2);
     }
 
     void remember_ghost(const KeyType& key) {

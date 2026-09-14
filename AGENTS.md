@@ -10,7 +10,9 @@
 
 Уже реализованы LRU, LFU, 2Q, ARC, LIRS, Belady, фабрика, иерархия, парсинг
 конфигов, генераторы конфигов/workloads и параллельный benchmark. Ёмкость везде
-измеряется количеством элементов, не байтами. Потокобезопасности нет.
+внутри policy измеряется количеством элементов. Опциональный CLI-режим
+пересчитывает входную ёмкость из логического byte-бюджета. Потокобезопасности
+нет.
 
 ## Структура и сборка
 
@@ -83,6 +85,18 @@ Trace приходит через stdin:
 Печатается ровно одно целое число — количество hits. Единственный `BELADY`
 переключает CLI в offline-flow. Ошибки печатаются в stderr с префиксом `error:`
 и дают код возврата 1.
+
+Без флага capacity ограничивает только residents, а shadow history является
+дополнительной. `--capacity-includes-shadow` включает
+`CapacityAccounting::resident_and_shadow`: byte-бюджет одного уровня равен
+`configured_capacity * (sizeof(Key)+sizeof(Value))`. Фабрика бинарным поиском
+выбирает максимальное число residents, сохраняющее default shadow ratio и
+удовлетворяющее `R*(sizeof(Key)+sizeof(Value)) + S*sizeof(Key) <= budget`.
+Учитываются только логические payload, не overhead контейнеров. При capacity 1
+приоритет получает один resident и shadow отключается. LRU/LFU не меняются.
+`--value-bytes N` заменяет `sizeof(Value)` в этой формуле на заданный логический
+размер, не меняя фактический `DefaultValue` trace-runner; без него сохраняется
+текущий compile-time размер.
 
 ## Контракт `Cache<KeyType, ValueType>`
 
@@ -164,9 +178,10 @@ Resident queues: `A1in` для новых и `Am` для повторно исп
 Повторная вставка key из `A1out` сразу идёт в `Am`. Вытеснения из `Am` в ghost
 не записываются.
 
-Текущие эвристики помечены `TODO(tuning)`: `A1in = max(1, capacity/4)`, default
-`A1out = max(1, capacity/2)` (для zero capacity оба ноль). Второй аргумент
-конструктора задаёт точный `max_shadow_items`.
+Текущая не вынесенная эвристика помечена `TODO(tuning)`:
+`A1in = max(1, capacity/4)`. Default `A1out = max(1, capacity/2)` (для zero
+capacity оба ноль), но shadow capacity уже настраивается вторым аргументом
+конструктора `max_shadow_items` и через budget planner, поэтому TODO на ней нет.
 
 ### ARC (`cache.arc`)
 
@@ -176,10 +191,10 @@ Hit переводит T1 -> T2 или обновляет MRU в T2. Новый 
 `max(1, |B2|/|B1|)`, B2 уменьшает на `max(1, |B1|/|B2|)`. Replacement выбирает
 между LRU T1 и LRU T2 относительно этой цели.
 
-Начальная цель T1 равна 0, default общий лимит `B1+B2` равен resident capacity;
-оба решения и предпочтение при trimming помечены `TODO(tuning)`. Второй
-аргумент конструктора задаёт общий shadow limit. `extract` удаляет resident без
-добавления в B1/B2.
+Начальная цель T1 равна 0 и предпочтение при trimming помечены `TODO(tuning)`.
+Default общий лимит `B1+B2` равен resident capacity, но уже настраивается:
+второй аргумент конструктора задаёт общий shadow limit. `extract` удаляет
+resident без добавления в B1/B2.
 
 ### LIRS (`cache.lirs`)
 
@@ -210,6 +225,13 @@ Default LIR quota: `capacity - max(1, capacity/100)`, то есть остаёт
 только 2Q/ARC/LIRS; для LRU/LFU она игнорируется. Belady намеренно не входит в
 factory.
 
+Перегрузка с `CapacityAccounting` либо сохраняет legacy `resident_only`, либо
+применяет `plan_cache_capacity<Key, Value>`. Возвращаемый `CacheCapacityPlan`
+содержит фактические resident/shadow capacities и является единственным местом
+расчёта CLI budget; не дублировать эту формулу в `main` или policy. Default
+shadow ratio берётся через `Policy::default_shadow_capacity`, поэтому его нельзя
+повторно хардкодить в factory.
+
 `parse_config` проверяет положительное число уровней и наличие заявленного
 количества имён, но не валидирует имена и не запрещает лишние токены — policy
 валидирует factory. `read_input` читает capacity, request count и ровно столько
@@ -230,11 +252,21 @@ factory.
 - `benchmark.py`: читает все `.conf`/`.trace`, запускает пары параллельно с
   timeout, ожидает одно целое число stdout. Для каждого количества уровней
   запускает Belady с capacity `capacity_per_level * levels`. Пишет полный CSV,
-  winner на workload и агрегированный winner на pattern; равенства разрешаются
-  лексикографически по имени конфига. Любой failed/ideal_failed run даёт exit 1.
+  winner на workload и агрегированный winner на pattern. Конфиги с хотя бы
+  одной 2Q/ARC/LIRS запускаются как `resident_only` и `resident_and_shadow`, а
+  чистые LRU/LFU — только как `resident_only`; режим записывается в
+  `capacity_mode` и входит в ключи агрегации/tie-break. `--value-bytes` принимает
+  один или несколько размеров (`current` означает `sizeof(DefaultValue)`),
+  добавляет эту размерность в задачи/агрегации и столбец `value_bytes`.
+  `--config-names` ограничивает прогон точными относительными именами. Любой
+  failed/ideal_failed run даёт exit 1.
 - `cache_benchmarks.ipynb`: запускает штатный benchmark из корня проекта,
   читает полный CSV и визуализирует top-5 по проценту от Belady, специализацию
-  по pattern, устойчивость, зависимость от capacity и Pareto hit-rate/runtime.
+  по pattern, устойчивость и зависимость от capacity. В рейтинги и графики для
+  2Q/ARC/LIRS допускается только `resident_and_shadow`; их `resident_only`
+  прогоны остаются в CSV как диагностика, но исключаются из честного сравнения.
+  Отдельный payload-size benchmark сравнивает оба режима для однородных
+  `2Q>2Q>2Q`, `ARC>ARC>ARC`, `LIRS>LIRS>LIRS` при current/64/256/1024 bytes.
 - CMake targets `generate_configs`, `generate_workloads`, `benchmark` доступны,
   если найден Python >= 3.10; `benchmark` зависит от `cache_sim` текущего build
   tree и обоих генераторов. Штатный полный запуск делается из Release preset.
@@ -246,7 +278,8 @@ factory.
    capacity, обновление существующего key и безопасный `extract`.
 2. Для списков плюс hash index явно поддерживать валидность итераторов после
    каждого insert/touch/extract/clear. Если есть ghosts, хранить там только keys
-   и соблюдать shadow limit, включая limit 0.
+   и соблюдать shadow limit, включая limit 0; предоставить статический
+   `default_shadow_capacity`, который сможет использовать capacity planner.
 3. Добавить import/ветку в `factory.cppm`, имя в `SUPPORTED_POLICIES` генератора
    конфигов, module interface в CMake и `<name>_test.cpp` в tests/CMakeLists.
 4. Минимальные тесты: victim/order, повторный hit, payload update, extract,
@@ -257,10 +290,12 @@ factory.
 
 ## Следующее ожидаемое развитие и известные ограничения
 
-- Вынести помеченные `TODO(tuning)` параметры 2Q/ARC/LIRS в policy config,
-  сохранив нынешние значения defaults и обратную совместимость factory.
-- Добавить режим общего бюджета `resident items + shadow items`; сейчас resident
-  capacity и `max_shadow_items` независимы, API лишь позволяет наблюдать оба.
+- Вынести оставшиеся помеченные `TODO(tuning)` алгоритмические параметры
+  2Q/ARC/LIRS в policy config, сохранив нынешние defaults и обратную
+  совместимость factory. Shadow capacity уже настраивается и сюда не относится.
+- Budgeted-режим уже ограничивает сумму логических payload. Если потребуется
+  оценивать реальную память, отдельно учесть allocator/container/hash overhead;
+  не выдавать нынешнюю `sizeof(Key)+sizeof(Value)` модель за фактический RSS.
 - Расширить формат config до параметров и, вероятно, отдельных capacities на
   уровень. Сейчас он задаёт только список policies, а CLI одинаково делит
   capacity по уровням.
