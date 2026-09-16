@@ -128,8 +128,9 @@ Trace приходит через stdin:
 
 ## `CacheHierarchy`
 
-Конструктор принимает непустой `vector<unique_ptr<Cache<...>>>`; порядок — от
-L1 к последнему уровню. Уровни могут иметь разные policy и capacity, хотя CLI
+Конструктор принимает непустой `vector<unique_ptr<Cache<...>>>` без null-уровней;
+порядок — от L1 к последнему уровню. Пустой список или null вызывает
+`invalid_argument`. Уровни могут иметь разные policy и capacity, хотя CLI
 сейчас даёт им одинаковую capacity. Иерархия эксклюзивная: resident key должен
 находиться только на одном уровне.
 
@@ -282,9 +283,11 @@ shadow ratio берётся через `Policy::default_shadow_capacity`, поэ
    `default_shadow_capacity`, который сможет использовать capacity planner.
 3. Добавить import/ветку в `factory.cppm`, имя в `SUPPORTED_POLICIES` генератора
    конфигов, module interface в CMake и `<name>_test.cpp` в tests/CMakeLists.
-4. Минимальные тесты: victim/order, повторный hit, payload update, extract,
-   capacity 0, custom Hash/Key при необходимости; для history-policy — ghost
-   hit и shadow limits 0/ненулевой. Проверить работу внутри hierarchy.
+4. Минимальные тесты: constructors/defaults, victim/order, повторный hit,
+   payload update, отсутствующий key, `find` без изменения policy, `clear`,
+   extract, capacity 0/1, move-only Value и custom Hash/Key; для history-policy
+   — ghost hit, безопасный `extract`, очистка history и shadow limits
+   0/ненулевой. Проверить работу внутри hierarchy.
 5. Выполнить Debug+CTest и Release build. Изменения CLI/pipeline дополнительно
    проверить коротким trace; stdout должен оставаться машинно-читаемым.
 

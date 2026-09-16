@@ -68,3 +68,103 @@ TEST(LIRSCache, LimitsNonResidentHIRHistory) {
     }
     EXPECT_EQ(without_shadow.shadow_size(), 0);
 }
+
+TEST(LIRSCache, ConstructorsExposeDefaultAndExplicitShadowCapacities) {
+    const LIRSCache<int, std::string> zero{0};
+    const LIRSCache<int, std::string> default_limit{8};
+    const LIRSCache<int, std::string> explicit_limit{8, 11};
+
+    EXPECT_EQ(zero.capacity(), 0);
+    EXPECT_EQ(zero.shadow_capacity(), 0);
+    EXPECT_EQ(default_limit.capacity(), 8);
+    EXPECT_EQ(default_limit.shadow_capacity(), 8);
+    EXPECT_EQ(explicit_limit.capacity(), 8);
+    EXPECT_EQ(explicit_limit.shadow_capacity(), 11);
+}
+
+TEST(LIRSCache, FindDoesNotPromoteAResidentHIRBlock) {
+    LIRSCache<int, std::string> cache{2};
+    static_cast<void>(cache.insert({1, "one"}));
+    static_cast<void>(cache.insert({2, "two"}));
+
+    ASSERT_NE(cache.find(2), nullptr);
+    const LIRSCache<int, std::string>& const_cache = cache;
+    ASSERT_NE(const_cache.find(2), nullptr);
+    const auto evicted = cache.insert({3, "three"});
+
+    ASSERT_TRUE(evicted.has_value());
+    EXPECT_EQ(evicted->key, 2);
+}
+
+TEST(LIRSCache, DuplicateInsertUsesTheResidentHitPath) {
+    LIRSCache<int, std::string> cache{2};
+    static_cast<void>(cache.insert({1, "one"}));
+    static_cast<void>(cache.insert({2, "old"}));
+
+    EXPECT_FALSE(cache.insert({2, "new"}).has_value());
+    const auto evicted = cache.insert({3, "three"});
+
+    ASSERT_TRUE(evicted.has_value());
+    EXPECT_EQ(evicted->key, 1);
+    ASSERT_NE(cache.find(2), nullptr);
+    EXPECT_EQ(*cache.find(2), "new");
+}
+
+TEST(LIRSCache, ExtractDoesNotLeaveShadowHistory) {
+    LIRSCache<int, std::string> cache{2, 4};
+    static_cast<void>(cache.insert({1, "one"}));
+    static_cast<void>(cache.insert({2, "two"}));
+
+    const auto hir = cache.extract(2);
+    const auto lir = cache.extract(1);
+
+    ASSERT_TRUE(hir.has_value());
+    ASSERT_TRUE(lir.has_value());
+    EXPECT_EQ(cache.size(), 0);
+    EXPECT_EQ(cache.shadow_size(), 0);
+}
+
+TEST(LIRSCache, TouchingANonResidentHIRBlockIsANoOp) {
+    LIRSCache<int, std::string> cache{2, 4};
+    static_cast<void>(cache.insert({1, "one"}));
+    static_cast<void>(cache.insert({2, "two"}));
+    static_cast<void>(cache.insert({3, "three"}));
+    ASSERT_EQ(cache.shadow_size(), 1);
+
+    cache.touch(2);
+
+    EXPECT_EQ(cache.size(), 2);
+    EXPECT_EQ(cache.shadow_size(), 1);
+    EXPECT_EQ(cache.find(2), nullptr);
+}
+
+TEST(LIRSCache, CapacityOneUsesOnlyResidentHIRWithoutHistory) {
+    LIRSCache<int, std::string> cache{1, 4};
+    static_cast<void>(cache.insert({1, "one"}));
+
+    const auto first = cache.insert({2, "two"});
+    const auto second = cache.insert({3, "three"});
+
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(first->key, 1);
+    EXPECT_EQ(second->key, 2);
+    EXPECT_EQ(cache.size(), 1);
+    EXPECT_EQ(cache.shadow_size(), 0);
+}
+
+TEST(LIRSCache, ClearRemovesNonResidentHIRHistory) {
+    LIRSCache<int, std::string> cache{2, 4};
+    static_cast<void>(cache.insert({1, "one"}));
+    static_cast<void>(cache.insert({2, "two"}));
+    static_cast<void>(cache.insert({3, "three"}));
+    ASSERT_GT(cache.shadow_size(), 0);
+
+    cache.clear();
+
+    EXPECT_EQ(cache.size(), 0);
+    EXPECT_EQ(cache.shadow_size(), 0);
+    EXPECT_FALSE(cache.insert({1, "fresh"}).has_value());
+    ASSERT_NE(cache.find(1), nullptr);
+    EXPECT_EQ(*cache.find(1), "fresh");
+}

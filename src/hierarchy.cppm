@@ -24,6 +24,11 @@ public:
         if (levels_.empty()) {
             throw std::invalid_argument("cache hierarchy must contain at least one level");
         }
+        for (const auto& level : levels_) {
+            if (!level) {
+                throw std::invalid_argument("cache hierarchy levels must not be null");
+            }
+        }
     }
 
     // Registers a cache access without filling the hierarchy on a miss.
