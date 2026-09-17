@@ -21,11 +21,14 @@ target_sources(cache_lib
             src/two_q.cppm
             src/arc.cppm
             src/lirs.cppm
+            src/cache_variant.cppm
             src/belady.cppm
             src/hierarchy.cppm
             src/factory.cppm
+            src/mock_db/mock_db.cppm
             src/config/config.cppm
     PRIVATE
+        src/mock_db/mock_db.cpp
         src/config/config.cpp
 )
 

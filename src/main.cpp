@@ -2,7 +2,6 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -16,6 +15,8 @@ import cache.belady;
 import cache.config;
 import cache.factory;
 import cache.hierarchy;
+import cache.mock_db;
+import cache.variant;
 
 int main(int argc, char** argv) {
     try {
@@ -61,18 +62,20 @@ int main(int argc, char** argv) {
 
         const Config config = parse_config(config_path);
         Input input = read_input(std::cin);
+        const std::size_t page_bytes = logical_value_bytes.value_or(default_page_bytes);
 
         if (config.policies.size() == 1 && config.policies.front() == "BELADY") {
-            const BeladyCache<DefaultKey> cache{
+            const BeladyCache<DefaultKey, DefaultValue, MockDatabase> cache{
                 input.cache_size,
-                std::move(input.requests)
+                std::move(input.requests),
+                MockDatabase{page_bytes}
             };
             std::cout << cache.run() << '\n';
             return 0;
         }
 
-        using OnlineCache = Cache<DefaultKey, DefaultValue>;
-        std::vector<std::unique_ptr<OnlineCache>> levels;
+        using OnlineCache = CacheVariant<DefaultKey, DefaultValue>;
+        std::vector<OnlineCache> levels;
         levels.reserve(config.policies.size());
 
         for (const auto& policy : config.policies) {
@@ -82,15 +85,15 @@ int main(int argc, char** argv) {
                 capacity_includes_shadow
                     ? CapacityAccounting::resident_and_shadow
                     : CapacityAccounting::resident_only,
-                logical_value_bytes.value_or(sizeof(DefaultValue))
+                page_bytes
             ));
         }
 
-        CacheHierarchy<DefaultKey, DefaultValue> hierarchy{std::move(levels)};
+        CacheHierarchy<DefaultKey, DefaultValue, MockDatabase> hierarchy{
+            std::move(levels), MockDatabase{page_bytes}
+        };
         for (const DefaultKey key : input.requests) {
-            if (hierarchy.access(key) == nullptr) {
-                hierarchy.insert({key, {}});
-            }
+            static_cast<void>(hierarchy.access(key));
         }
 
         std::cout << hierarchy.hits() << '\n';

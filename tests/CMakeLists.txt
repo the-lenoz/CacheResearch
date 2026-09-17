@@ -23,6 +23,7 @@ add_executable(cache_tests
     hierarchy_test.cpp
     factory_test.cpp
     config_test.cpp
+    mock_db_test.cpp
 )
 
 target_compile_features(cache_tests PRIVATE cxx_std_20)

@@ -19,8 +19,10 @@ export template <
     typename Hash = std::hash<KeyType>,
     typename KeyEqual = std::equal_to<KeyType>
 >
-class ARCCache final : public Cache<KeyType, ValueType> {
+class ARCCache final {
 public:
+    using key_type = KeyType;
+    using value_type = ValueType;
     using entry_type = CacheEntry<KeyType, ValueType>;
 
     explicit ARCCache(std::size_t capacity)
@@ -35,17 +37,17 @@ public:
         return capacity;
     }
 
-    [[nodiscard]] ValueType* find(const KeyType& key) override {
+    [[nodiscard]] ValueType* find(const KeyType& key) {
         const auto found = resident_.find(key);
         return found == resident_.end() ? nullptr : &found->second.value;
     }
 
-    [[nodiscard]] const ValueType* find(const KeyType& key) const override {
+    [[nodiscard]] const ValueType* find(const KeyType& key) const {
         const auto found = resident_.find(key);
         return found == resident_.end() ? nullptr : &found->second.value;
     }
 
-    void touch(const KeyType& key) override {
+    void touch(const KeyType& key) {
         const auto found = resident_.find(key);
         if (found == resident_.end()) {
             return;
@@ -61,7 +63,7 @@ public:
         }
     }
 
-    [[nodiscard]] std::optional<entry_type> insert(entry_type entry) override {
+    [[nodiscard]] std::optional<entry_type> insert(entry_type entry) {
         const auto resident = resident_.find(entry.key);
         if (resident != resident_.end()) {
             resident->second.value = std::move(entry.value);
@@ -144,7 +146,7 @@ public:
         return evicted;
     }
 
-    [[nodiscard]] std::optional<entry_type> extract(const KeyType& key) override {
+    [[nodiscard]] std::optional<entry_type> extract(const KeyType& key) {
         const auto found = resident_.find(key);
         if (found == resident_.end()) {
             return std::nullopt;
@@ -157,7 +159,7 @@ public:
         return std::optional<entry_type>{std::move(extracted)};
     }
 
-    void clear() override {
+    void clear() {
         resident_.clear();
         b1_index_.clear();
         b2_index_.clear();
@@ -168,20 +170,28 @@ public:
         target_t1_size_ = 0;
     }
 
-    [[nodiscard]] std::size_t size() const override {
+    [[nodiscard]] std::size_t size() const {
         return resident_.size();
     }
 
-    [[nodiscard]] std::size_t capacity() const override {
+    [[nodiscard]] std::size_t capacity() const {
         return capacity_;
     }
 
-    [[nodiscard]] std::size_t shadow_size() const override {
+    [[nodiscard]] std::size_t shadow_size() const {
         return b1_.size() + b2_.size();
     }
 
-    [[nodiscard]] std::size_t shadow_capacity() const override {
+    [[nodiscard]] std::size_t shadow_capacity() const {
         return shadow_capacity_;
+    }
+
+    [[nodiscard]] bool contains(const KeyType& key) const {
+        return find(key) != nullptr;
+    }
+
+    void erase(const KeyType& key) {
+        static_cast<void>(extract(key));
     }
 
 private:

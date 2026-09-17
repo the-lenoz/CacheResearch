@@ -18,31 +18,33 @@ export template <
     typename Hash = std::hash<KeyType>,
     typename KeyEqual = std::equal_to<KeyType>
 >
-class LRUCache final : public Cache<KeyType, ValueType> {
+class LRUCache final {
 public:
+    using key_type = KeyType;
+    using value_type = ValueType;
     using entry_type = CacheEntry<KeyType, ValueType>;
 
     explicit LRUCache(std::size_t capacity)
         : capacity_(capacity) {}
 
-    [[nodiscard]] ValueType* find(const KeyType& key) override {
+    [[nodiscard]] ValueType* find(const KeyType& key) {
         const auto found = index_.find(key);
         return found == index_.end() ? nullptr : &found->second->value;
     }
 
-    [[nodiscard]] const ValueType* find(const KeyType& key) const override {
+    [[nodiscard]] const ValueType* find(const KeyType& key) const {
         const auto found = index_.find(key);
         return found == index_.end() ? nullptr : &found->second->value;
     }
 
-    void touch(const KeyType& key) override {
+    void touch(const KeyType& key) {
         const auto found = index_.find(key);
         if (found != index_.end()) {
             entries_.splice(entries_.begin(), entries_, found->second);
         }
     }
 
-    [[nodiscard]] std::optional<entry_type> insert(entry_type entry) override {
+    [[nodiscard]] std::optional<entry_type> insert(entry_type entry) {
         const auto found = index_.find(entry.key);
         if (found != index_.end()) {
             found->second->value = std::move(entry.value);
@@ -67,7 +69,7 @@ public:
         return evicted;
     }
 
-    [[nodiscard]] std::optional<entry_type> extract(const KeyType& key) override {
+    [[nodiscard]] std::optional<entry_type> extract(const KeyType& key) {
         const auto found = index_.find(key);
         if (found == index_.end()) {
             return std::nullopt;
@@ -80,18 +82,29 @@ public:
         return std::optional<entry_type>{std::move(extracted)};
     }
 
-    void clear() override {
+    void clear() {
         index_.clear();
         entries_.clear();
     }
 
-    [[nodiscard]] std::size_t size() const override {
+    [[nodiscard]] std::size_t size() const {
         return entries_.size();
     }
 
-    [[nodiscard]] std::size_t capacity() const override {
+    [[nodiscard]] std::size_t capacity() const {
         return capacity_;
     }
+
+    [[nodiscard]] bool contains(const KeyType& key) const {
+        return find(key) != nullptr;
+    }
+
+    void erase(const KeyType& key) {
+        static_cast<void>(extract(key));
+    }
+
+    [[nodiscard]] std::size_t shadow_size() const { return 0; }
+    [[nodiscard]] std::size_t shadow_capacity() const { return 0; }
 
 private:
     using EntryList = std::list<entry_type>;

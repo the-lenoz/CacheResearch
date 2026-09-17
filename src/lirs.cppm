@@ -2,9 +2,12 @@ module;
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <list>
+#include <limits>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -19,8 +22,10 @@ export template <
     typename Hash = std::hash<KeyType>,
     typename KeyEqual = std::equal_to<KeyType>
 >
-class LIRSCache final : public Cache<KeyType, ValueType> {
+class LIRSCache final {
 public:
+    using key_type = KeyType;
+    using value_type = ValueType;
     using entry_type = CacheEntry<KeyType, ValueType>;
 
     explicit LIRSCache(std::size_t capacity)
@@ -37,21 +42,21 @@ public:
         return capacity;
     }
 
-    [[nodiscard]] ValueType* find(const KeyType& key) override {
+    [[nodiscard]] ValueType* find(const KeyType& key) {
         const auto found = entries_.find(key);
         return found == entries_.end() || !found->second.value
             ? nullptr
             : &*found->second.value;
     }
 
-    [[nodiscard]] const ValueType* find(const KeyType& key) const override {
+    [[nodiscard]] const ValueType* find(const KeyType& key) const {
         const auto found = entries_.find(key);
         return found == entries_.end() || !found->second.value
             ? nullptr
             : &*found->second.value;
     }
 
-    void touch(const KeyType& key) override {
+    void touch(const KeyType& key) {
         const auto found = entries_.find(key);
         if (found == entries_.end() || !found->second.value) {
             return;
@@ -81,7 +86,7 @@ public:
         prune_stack();
     }
 
-    [[nodiscard]] std::optional<entry_type> insert(entry_type entry) override {
+    [[nodiscard]] std::optional<entry_type> insert(entry_type entry) {
         const auto resident = entries_.find(entry.key);
         if (resident != entries_.end() && resident->second.value) {
             resident->second.value = std::move(entry.value);
@@ -96,6 +101,7 @@ public:
         const auto history = entries_.find(entry.key);
         if (history != entries_.end()) {
             history->second.value.emplace(std::move(entry.value));
+            shadow_index_.erase(history->second.stack_epoch);
             ++resident_count_;
             std::optional<entry_type> evicted;
             if (resident_count_ > capacity_) {
@@ -111,6 +117,7 @@ public:
         }
 
         const bool make_lir = lir_count_ < lir_capacity_;
+        const std::uint64_t stack_epoch = next_stack_epoch();
         stack_.push_front(entry.key);
         typename KeyList::iterator queue_position{};
         bool in_queue = false;
@@ -128,6 +135,7 @@ public:
                 make_lir,
                 true,
                 stack_.begin(),
+                stack_epoch,
                 in_queue,
                 queue_position
             }
@@ -140,7 +148,7 @@ public:
         return evicted;
     }
 
-    [[nodiscard]] std::optional<entry_type> extract(const KeyType& key) override {
+    [[nodiscard]] std::optional<entry_type> extract(const KeyType& key) {
         const auto found = entries_.find(key);
         if (found == entries_.end() || !found->second.value) {
             return std::nullopt;
@@ -163,28 +171,38 @@ public:
         return std::optional<entry_type>{std::move(extracted)};
     }
 
-    void clear() override {
+    void clear() {
+        shadow_index_.clear();
         entries_.clear();
         stack_.clear();
         queue_.clear();
         resident_count_ = 0;
         lir_count_ = 0;
+        next_stack_epoch_ = 0;
     }
 
-    [[nodiscard]] std::size_t size() const override {
+    [[nodiscard]] std::size_t size() const {
         return resident_count_;
     }
 
-    [[nodiscard]] std::size_t capacity() const override {
+    [[nodiscard]] std::size_t capacity() const {
         return capacity_;
     }
 
-    [[nodiscard]] std::size_t shadow_size() const override {
-        return entries_.size() - resident_count_;
+    [[nodiscard]] std::size_t shadow_size() const {
+        return shadow_index_.size();
     }
 
-    [[nodiscard]] std::size_t shadow_capacity() const override {
+    [[nodiscard]] std::size_t shadow_capacity() const {
         return shadow_capacity_;
+    }
+
+    [[nodiscard]] bool contains(const KeyType& key) const {
+        return find(key) != nullptr;
+    }
+
+    void erase(const KeyType& key) {
+        static_cast<void>(extract(key));
     }
 
 private:
@@ -195,6 +213,7 @@ private:
         bool is_lir = false;
         bool in_stack = false;
         KeyList::iterator stack_position{};
+        std::uint64_t stack_epoch = 0;
         bool in_queue = false;
         KeyList::iterator queue_position{};
     };
@@ -208,12 +227,34 @@ private:
     }
 
     void move_to_stack_front(const KeyType& key, Node& node) {
+        const std::uint64_t stack_epoch = next_stack_epoch();
         if (node.in_stack) {
             stack_.erase(node.stack_position);
         }
         stack_.push_front(key);
         node.in_stack = true;
         node.stack_position = stack_.begin();
+        node.stack_epoch = stack_epoch;
+    }
+
+    [[nodiscard]] std::uint64_t next_stack_epoch() {
+        if (next_stack_epoch_ == std::numeric_limits<std::uint64_t>::max()) {
+            // Rebase only after 2^64 stack insertions/moves; S order is unchanged.
+            shadow_index_.clear();
+            std::uint64_t epoch = 0;
+            for (auto position = stack_.rbegin(); position != stack_.rend(); ++position) {
+                const auto found = entries_.find(*position);
+                if (found == entries_.end()) {
+                    continue;
+                }
+                found->second.stack_epoch = ++epoch;
+                if (!found->second.value) {
+                    shadow_index_.emplace(epoch, found->first);
+                }
+            }
+            next_stack_epoch_ = epoch;
+        }
+        return ++next_stack_epoch_;
     }
 
     void remove_from_queue(Node& node) {
@@ -269,32 +310,22 @@ private:
 
             found->second.in_stack = false;
             stack_.pop_back();
-            if (!found->second.value && !found->second.in_queue) {
-                entries_.erase(found);
+            if (!found->second.value) {
+                shadow_index_.erase(found->second.stack_epoch);
+                if (!found->second.in_queue) {
+                    entries_.erase(found);
+                }
             }
         }
     }
 
     void trim_shadow_history() {
-        while (shadow_size() > shadow_capacity_) {
-            // TODO(tuning): make the oldest-shadow removal strategy configurable.
-            auto shadow_position = stack_.end();
-            for (auto position = stack_.end(); position != stack_.begin();) {
-                --position;
-                const auto found = entries_.find(*position);
-                if (found != entries_.end() && !found->second.value) {
-                    shadow_position = position;
-                    break;
-                }
-            }
-
-            if (shadow_position == stack_.end()) {
-                break;
-            }
-
-            const auto shadow = entries_.find(*shadow_position);
+        while (shadow_index_.size() > shadow_capacity_) {
+            const auto oldest = shadow_index_.begin();
+            const auto shadow = entries_.find(oldest->second);
             shadow->second.in_stack = false;
-            stack_.erase(shadow_position);
+            stack_.erase(shadow->second.stack_position);
+            shadow_index_.erase(oldest);
             entries_.erase(shadow);
         }
     }
@@ -313,8 +344,13 @@ private:
 
         if (!found->second.in_stack) {
             entries_.erase(found);
+        } else if (shadow_capacity_ == 0) {
+            stack_.erase(found->second.stack_position);
+            entries_.erase(found);
+        } else {
+            shadow_index_.emplace(found->second.stack_epoch, found->first);
+            trim_shadow_history();
         }
-        trim_shadow_history();
         return std::optional<entry_type>{std::move(evicted)};
     }
 
@@ -341,8 +377,10 @@ private:
     std::size_t shadow_capacity_;
     std::size_t resident_count_ = 0;
     std::size_t lir_count_ = 0;
+    std::uint64_t next_stack_epoch_ = 0;
     KeyList stack_;
     KeyList queue_;
+    std::map<std::uint64_t, KeyType> shadow_index_;
     std::unordered_map<KeyType, Node, Hash, KeyEqual> entries_;
     KeyEqual key_equal_{};
 };

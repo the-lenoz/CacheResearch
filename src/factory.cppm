@@ -3,11 +3,11 @@ module;
 #include <cstddef>
 #include <functional>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 
 export module cache.factory;
 
@@ -17,6 +17,7 @@ import cache.lfu;
 import cache.lirs;
 import cache.lru;
 import cache.two_q;
+import cache.variant;
 
 export enum class CapacityAccounting {
     resident_only,
@@ -145,53 +146,62 @@ export template <
     typename Hash = std::hash<KeyType>,
     typename KeyEqual = std::equal_to<KeyType>
 >
-[[nodiscard]] std::unique_ptr<Cache<KeyType, ValueType>> make_cache(
+[[nodiscard]] CacheVariant<KeyType, ValueType, Hash, KeyEqual> make_cache(
     std::string_view policy,
     std::size_t capacity,
     std::optional<std::size_t> shadow_capacity = std::nullopt
 ) {
+    using variant_type = CacheVariant<KeyType, ValueType, Hash, KeyEqual>;
     if (policy == "LRU") {
-        return std::make_unique<LRUCache<KeyType, ValueType, Hash, KeyEqual>>(
+        return variant_type{
+            std::in_place_type<LRUCache<KeyType, ValueType, Hash, KeyEqual>>,
             capacity
-        );
+        };
     }
     if (policy == "LFU") {
-        return std::make_unique<LFUCache<KeyType, ValueType, Hash, KeyEqual>>(
+        return variant_type{
+            std::in_place_type<LFUCache<KeyType, ValueType, Hash, KeyEqual>>,
             capacity
-        );
+        };
     }
     if (policy == "2Q") {
         if (shadow_capacity) {
-            return std::make_unique<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>(
+            return variant_type{
+                std::in_place_type<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>,
                 capacity,
                 *shadow_capacity
-            );
+            };
         }
-        return std::make_unique<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>(
+        return variant_type{
+            std::in_place_type<TwoQCache<KeyType, ValueType, Hash, KeyEqual>>,
             capacity
-        );
+        };
     }
     if (policy == "ARC") {
         if (shadow_capacity) {
-            return std::make_unique<ARCCache<KeyType, ValueType, Hash, KeyEqual>>(
+            return variant_type{
+                std::in_place_type<ARCCache<KeyType, ValueType, Hash, KeyEqual>>,
                 capacity,
                 *shadow_capacity
-            );
+            };
         }
-        return std::make_unique<ARCCache<KeyType, ValueType, Hash, KeyEqual>>(
+        return variant_type{
+            std::in_place_type<ARCCache<KeyType, ValueType, Hash, KeyEqual>>,
             capacity
-        );
+        };
     }
     if (policy == "LIRS") {
         if (shadow_capacity) {
-            return std::make_unique<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>(
+            return variant_type{
+                std::in_place_type<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>,
                 capacity,
                 *shadow_capacity
-            );
+            };
         }
-        return std::make_unique<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>(
+        return variant_type{
+            std::in_place_type<LIRSCache<KeyType, ValueType, Hash, KeyEqual>>,
             capacity
-        );
+        };
     }
 
     throw std::invalid_argument("unsupported online cache policy: " + std::string{policy});
@@ -203,7 +213,7 @@ export template <
     typename Hash = std::hash<KeyType>,
     typename KeyEqual = std::equal_to<KeyType>
 >
-[[nodiscard]] std::unique_ptr<Cache<KeyType, ValueType>> make_cache(
+[[nodiscard]] CacheVariant<KeyType, ValueType, Hash, KeyEqual> make_cache(
     std::string_view policy,
     std::size_t configured_capacity,
     CapacityAccounting accounting,

@@ -13,7 +13,7 @@ Implemented policies:
 
 Online policies can be combined into an exclusive multi-level hierarchy. Cache
 interfaces are templated by key and value type, while the CLI simulator uses
-`int` keys and an empty payload.
+`int` keys and byte-array pages loaded by a deterministic mock database.
 
 ## Build and run
 
@@ -49,25 +49,26 @@ Input format:
 
 ## Hierarchy API
 
-Lookup and cache filling are separate operations. `access(key)` updates the
-replacement policy and promotes a hit to L1, but does not insert anything on a
-miss. `insert(entry)` explicitly fills L1 and cascades evictions through lower
-levels:
+Pass a `slow_get_page(key) -> Value` functor when constructing the hierarchy.
+`access(key)` promotes a hit to L1; on a full miss it calls the functor once and
+fills the cache. The result exposes `hit()` and `value()`. Explicit `insert(entry)`
+remains available for preloading or replacing a value without calling the loader:
 
 ```cpp
-if (auto* cached = hierarchy.access(key)) {
-    return *cached;
-}
-
-auto value = load_from_storage(key);
-hierarchy.insert({key, value});
-return value;
+auto result = hierarchy.access(key);
+consume(result.value());
+record_hit(result.hit());
 ```
 
 `find(key)` only observes the currently stored value. It does not count a hit,
-change replacement-policy state, or promote an entry. Pointers returned by
-`access()` and `find()` should be treated as invalid after the next mutating
-operation on the hierarchy.
+change replacement-policy state, or promote an entry. References to cached values
+returned by `access()` and pointers from `find()` are invalid after the next
+mutating operation. When every level has zero capacity, the access result owns
+the loaded value until that result is destroyed.
+
+The CLI mock database generates the same page for the same key on every miss.
+It has no persistent backing store or artificial delay. Page size is 32 bytes
+by default; `--value-bytes N` sets the actual page size.
 
 ## Tests
 
@@ -115,9 +116,9 @@ percentage of the ideal hit count. Configurations containing 2Q, ARC, or LIRS
 are run twice: `resident_only` preserves the legacy resident capacity and
 `resident_and_shadow` applies `--capacity-includes-shadow`. The
 `capacity_mode` CSV column distinguishes these variants. Use
-`--value-bytes current 64 256 1024` to add a logical payload-size dimension;
+`--value-bytes current 64 256 1024` to vary the actual page size;
 the selected value is written to `value_bytes`. `current` uses the compiled
-`sizeof(DefaultValue)`. `--config-names` can restrict a focused experiment to
+32-byte default. `--config-names` can restrict a focused experiment to
 specific config paths relative to `--configs`.
 
 The complete pipeline is also available as a CMake target:
@@ -129,27 +130,27 @@ cmake --build --preset release --target benchmark
 ## Shadow-history limits
 
 2Q, ARC, and LIRS accept `max_shadow_items` as the second constructor argument.
-Their common `Cache` interface exposes `shadow_size()` and `shadow_capacity()`;
+Each policy exposes `shadow_size()` and `shadow_capacity()`;
 LRU and LFU report zero for both. The factory accepts the same limit as its
 optional third argument.
 
 `CapacityAccounting::resident_and_shadow` treats the configured capacity as a
 logical byte budget of
-`capacity * (sizeof(KeyType) + sizeof(ValueType))`. It selects the largest
+`capacity * (sizeof(KeyType) + logical_value_bytes)`. It selects the largest
 resident capacity that preserves the policy's default shadow ratio while
 satisfying:
 
 ```text
-resident_capacity * (sizeof(KeyType) + sizeof(ValueType))
+resident_capacity * (sizeof(KeyType) + logical_value_bytes)
     + shadow_capacity * sizeof(KeyType)
     <= configured logical byte budget
 ```
 
 This intentionally counts logical key/value payload only, not allocator,
-container-node, or hash-table overhead. A one-item budget prioritizes one
-resident item and disables shadow history. CLI option `--value-bytes N`
-overrides only the logical value size used by this planner; the trace runner
-continues to use `DefaultValue` as its actual payload.
+container-node, vector-object, or hash-table overhead. A one-item budget
+prioritizes one resident item and disables shadow history. CLI option
+`--value-bytes N` changes both the actual mock page size and the logical size
+used by this planner.
 
 Current policy defaults are explicitly marked with `TODO(tuning)` next to the
 still hard-coded algorithmic heuristics: the A1in share in 2Q, ARC's initial

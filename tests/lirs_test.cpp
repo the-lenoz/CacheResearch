@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <functional>
 #include <string>
+#include <utility>
 
 import cache;
 import cache.lirs;
@@ -167,4 +170,99 @@ TEST(LIRSCache, ClearRemovesNonResidentHIRHistory) {
     EXPECT_FALSE(cache.insert({1, "fresh"}).has_value());
     ASSERT_NE(cache.find(1), nullptr);
     EXPECT_EQ(*cache.find(1), "fresh");
+}
+
+TEST(LIRSCache, ShadowLimitRetainsTheMostRecentStackHistory) {
+    LIRSCache<int, std::string> cache{2, 1};
+    for (int key = 1; key <= 4; ++key) {
+        static_cast<void>(cache.insert({key, std::to_string(key)}));
+    }
+    ASSERT_EQ(cache.shadow_size(), 1);
+
+    const auto ghost_hit_victim = cache.insert({3, "three again"});
+    ASSERT_TRUE(ghost_hit_victim.has_value());
+    EXPECT_EQ(ghost_hit_victim->key, 4);
+    const auto next_victim = cache.insert({5, "five"});
+    ASSERT_TRUE(next_victim.has_value());
+    EXPECT_EQ(next_victim->key, 1);
+    EXPECT_LE(cache.shadow_size(), cache.shadow_capacity());
+}
+
+TEST(LIRSCache, PruningAndExtractRemoveIndexedShadows) {
+    LIRSCache<int, std::string> cache{2, 4};
+    static_cast<void>(cache.insert({1, "one"}));
+    static_cast<void>(cache.insert({2, "two"}));
+    static_cast<void>(cache.insert({3, "three"}));
+    ASSERT_EQ(cache.shadow_size(), 1);
+
+    cache.touch(3);
+    EXPECT_EQ(cache.shadow_size(), 0);
+
+    cache.clear();
+    EXPECT_EQ(cache.shadow_size(), 0);
+
+    LIRSCache<int, std::string> extracted_cache{2, 4};
+    static_cast<void>(extracted_cache.insert({1, "one"}));
+    static_cast<void>(extracted_cache.insert({2, "two"}));
+    static_cast<void>(extracted_cache.insert({3, "three"}));
+    ASSERT_EQ(extracted_cache.shadow_size(), 1);
+
+    ASSERT_TRUE(extracted_cache.extract(3).has_value());
+    EXPECT_EQ(extracted_cache.shadow_size(), 1);
+    ASSERT_TRUE(extracted_cache.extract(1).has_value());
+    EXPECT_EQ(extracted_cache.shadow_size(), 0);
+}
+
+TEST(LIRSCache, ZeroShadowLimitDoesNotAccumulateHistory) {
+    LIRSCache<int, std::string> cache{128, 0};
+    for (int key = 0; key < 1000; ++key) {
+        static_cast<void>(cache.insert({key, std::to_string(key)}));
+        EXPECT_EQ(cache.shadow_size(), 0);
+    }
+    EXPECT_EQ(cache.size(), 128);
+}
+
+TEST(LIRSCache, MovingACacheWithShadowKeepsIndexesValid) {
+    LIRSCache<int, std::string> original{2, 1};
+    static_cast<void>(original.insert({1, "one"}));
+    static_cast<void>(original.insert({2, "two"}));
+    static_cast<void>(original.insert({3, "three"}));
+    ASSERT_EQ(original.shadow_size(), 1);
+
+    auto moved = std::move(original);
+    EXPECT_EQ(moved.shadow_size(), 1);
+    const auto victim = moved.insert({2, "two again"});
+    ASSERT_TRUE(victim.has_value());
+    EXPECT_EQ(victim->key, 3);
+    ASSERT_NE(moved.find(2), nullptr);
+    EXPECT_EQ(*moved.find(2), "two again");
+    EXPECT_LE(moved.shadow_size(), moved.shadow_capacity());
+}
+
+namespace {
+struct OpaqueKey { int id; };
+struct OpaqueHash {
+    std::size_t operator()(const OpaqueKey& key) const noexcept {
+        return std::hash<int>{}(key.id);
+    }
+};
+struct OpaqueEqual {
+    bool operator()(const OpaqueKey& left, const OpaqueKey& right) const noexcept {
+        return left.id == right.id;
+    }
+};
+}
+
+TEST(LIRSCache, IndexedHistoryWorksWithCustomHashAndEquality) {
+    LIRSCache<OpaqueKey, std::string, OpaqueHash, OpaqueEqual> cache{2, 1};
+    static_cast<void>(cache.insert({{1}, "one"}));
+    static_cast<void>(cache.insert({{2}, "two"}));
+    static_cast<void>(cache.insert({{3}, "three"}));
+    ASSERT_EQ(cache.shadow_size(), 1);
+
+    const auto victim = cache.insert({{2}, "again"});
+    ASSERT_TRUE(victim.has_value());
+    EXPECT_EQ(victim->key.id, 3);
+    ASSERT_NE(cache.find(OpaqueKey{2}), nullptr);
+    EXPECT_EQ(*cache.find(OpaqueKey{2}), "again");
 }

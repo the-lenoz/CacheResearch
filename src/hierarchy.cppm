@@ -1,69 +1,75 @@
 module;
 
 #include <cstddef>
-#include <memory>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 
 export module cache.hierarchy;
 
 import cache;
+import cache.variant;
 
-export template <typename KeyType, typename ValueType>
+export template <typename KeyType, typename ValueType, typename Loader>
 class CacheHierarchy {
 public:
-    using cache_type = Cache<KeyType, ValueType>;
+    using cache_type = CacheVariant<KeyType, ValueType>;
     using entry_type = CacheEntry<KeyType, ValueType>;
     using key_type = KeyType;
     using value_type = ValueType;
+    using result_type = CacheAccessResult<ValueType>;
 
-    explicit CacheHierarchy(std::vector<std::unique_ptr<cache_type>> levels)
-        : levels_(std::move(levels)) {
+    explicit CacheHierarchy(std::vector<cache_type> levels, Loader slow_get_page)
+        : levels_(std::move(levels)), slow_get_page_(std::move(slow_get_page)) {
         if (levels_.empty()) {
             throw std::invalid_argument("cache hierarchy must contain at least one level");
         }
-        for (const auto& level : levels_) {
-            if (!level) {
-                throw std::invalid_argument("cache hierarchy levels must not be null");
-            }
-        }
     }
 
-    // Registers a cache access without filling the hierarchy on a miss.
-    // A hit is promoted to L1 and returns the value already stored in the cache.
-    [[nodiscard]] value_type* access(const key_type& key) {
+    // A hit promotes the stored value; a full miss loads and inserts one page.
+    [[nodiscard]] result_type access(const key_type& key) {
         for (std::size_t level = 0; level < levels_.size(); ++level) {
-            if (!levels_[level]->contains(key)) {
+            if (!std::visit([&](const auto& cache) { return cache.contains(key); },
+                            levels_[level])) {
                 continue;
             }
 
             ++hit_count_;
             if (level == 0) {
-                levels_.front()->touch(key);
+                std::visit([&](auto& cache) { cache.touch(key); }, levels_.front());
             } else {
-                auto promoted = levels_[level]->extract(key);
-                place(std::move(*promoted), 0);
+                auto promoted = std::visit([&](auto& cache) { return cache.extract(key); },
+                                           levels_[level]);
+                static_cast<void>(place(std::move(*promoted), 0));
             }
-            return find(key);
+            return result_type{true, find(key)};
         }
 
-        return nullptr;
+        entry_type loaded{key, slow_get_page_(key)};
+        auto dropped = place(std::move(loaded), 0);
+        if (auto* resident = find(key)) {
+            return result_type{false, resident};
+        }
+        return result_type{std::move(dropped->value)};
     }
 
     // Explicitly fills L1. Any eviction cascades through the lower levels.
     void insert(entry_type entry) {
         // Keep the hierarchy exclusive when a caller replaces an existing key.
         for (std::size_t level = 1; level < levels_.size(); ++level) {
-            levels_[level]->erase(entry.key);
+            std::visit([&](auto& cache) { cache.erase(entry.key); }, levels_[level]);
         }
-        place(std::move(entry), 0);
+        static_cast<void>(place(std::move(entry), 0));
     }
 
     [[nodiscard]] value_type* find(const key_type& key) {
         for (auto& level : levels_) {
-            if (auto* value = level->find(key)) {
+            if (auto* value = std::visit([&](auto& cache) -> value_type* {
+                    return cache.find(key);
+                }, level)) {
                 return value;
             }
         }
@@ -72,7 +78,9 @@ public:
 
     [[nodiscard]] const value_type* find(const key_type& key) const {
         for (const auto& level : levels_) {
-            if (const auto* value = std::as_const(*level).find(key)) {
+            if (const auto* value = std::visit([&](const auto& cache) -> const value_type* {
+                    return cache.find(key);
+                }, level)) {
                 return value;
             }
         }
@@ -84,14 +92,18 @@ public:
     }
 
 private:
-    void place(entry_type entry, std::size_t first_level) {
+    [[nodiscard]] std::optional<entry_type> place(entry_type entry, std::size_t first_level) {
         std::optional<entry_type> moving{std::move(entry)};
 
         for (std::size_t level = first_level; level < levels_.size() && moving; ++level) {
-            moving = levels_[level]->insert(std::move(*moving));
+            moving = std::visit([&](auto& cache) {
+                return cache.insert(std::move(*moving));
+            }, levels_[level]);
         }
+        return moving;
     }
 
-    std::vector<std::unique_ptr<cache_type>> levels_;
+    std::vector<cache_type> levels_;
+    Loader slow_get_page_;
     std::size_t hit_count_ = 0;
 };

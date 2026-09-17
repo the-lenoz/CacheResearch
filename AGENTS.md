@@ -5,7 +5,7 @@
 Это исследовательский проект для сравнения алгоритмов
 вытеснения. Online-кэши шаблонизированы по ключу и значению и могут быть
 собраны в эксклюзивную многоуровневую иерархию. CLI проигрывает traces с
-`int`-ключами и пустым payload (`std::monostate`). Belady реализован отдельно
+`int`-ключами и байтовыми страницами (`std::vector<std::byte>`). Belady реализован отдельно
 как offline-эталон.
 
 Уже реализованы LRU, LFU, 2Q, ARC, LIRS, Belady, фабрика, иерархия, парсинг
@@ -17,13 +17,15 @@
 ## Структура и сборка
 
 ```text
-src/cache.cppm          общий Cache<Key, Value> и CacheEntry
+src/cache.cppm          CacheEntry, DefaultKey и DefaultValue
+src/cache_variant.cppm  общий CacheVariant из пяти online-политик
 src/{lru,lfu}.cppm      простые online-политики
 src/{two_q,arc,lirs}.cppm  политики с shadow/ghost history
-src/belady.cppm         offline optimum, не наследует Cache
+src/belady.cppm         offline optimum, отдельно от online variant
 src/hierarchy.cppm      эксклюзивная L1 -> L2 -> ... иерархия
 src/factory.cppm        создание online-политик по имени
-src/config/             единственное разделение .cppm + .cpp
+src/mock_db/             конкретный CLI-функтор: .cppm + .cpp
+src/config/             парсинг, разделение .cppm + .cpp
 src/main.cpp            CLI cache_sim
 cache_benchmarks.ipynb  запуск benchmark и графики hit-rate/Belady/Pareto
 tests/                  GoogleTest, один файл на компонент
@@ -43,7 +45,7 @@ cmake --preset release
 cmake --build --preset release --parallel
 ```
 
-`cache_lib` содержит module interfaces и `config.cpp`; `cache_sim` линкуется с
+`cache_lib` содержит module interfaces, `config.cpp` и `mock_db.cpp`; `cache_sim` линкуется с
 ним. Тесты включаются только через `CACHE_RESEARCH_BUILD_TESTS`/preset
 `debug-tests`. GoogleTest сначала ищется в системе, иначе получается через
 FetchContent.
@@ -54,8 +56,8 @@ FetchContent.
   быть видима в interface unit. Не создавать для него папку и пустой `.cpp`. При этом если требуется 
 большая, не шаблонизированая логика, которую можно вынести в `.cpp` - вынеси и сложи в подпапку src. 
 Это принцип чистоты архитектуры 
-- `config` оставлять в `src/config/`: публичные объявления находятся в
-  `config.cppm`, нетемплейтные определения — в `config.cpp`. Это и есть пример чисто вынесенной логики.
+- `config` и `mock_db` оставлять в подпапках: публичные объявления в `.cppm`,
+  нетемплейтные определения — в `.cpp`. Это примеры вынесенной логики.
 - Стандартные `#include` размещать в global module fragment после `module;`,
   затем писать `export module cache.<name>;`, после него — `import cache;` и
   другие module imports.
@@ -80,8 +82,8 @@ Trace приходит через stdin:
 <key_1> ... <key_n>
 ```
 
-Для online-конфига CLI создаёт каждый уровень с одной и той же ёмкостью,
-вызывает `hierarchy.access(key)` и на miss делает `hierarchy.insert({key, {}})`.
+Для online-конфига CLI создаёт каждый уровень с одной и той же ёмкостью и
+вызывает `hierarchy.access(key)`; при полном miss загрузчик создаёт страницу.
 Печатается ровно одно целое число — количество hits. Единственный `BELADY`
 переключает CLI в offline-flow. Ошибки печатаются в stderr с префиксом `error:`
 и дают код возврата 1.
@@ -89,16 +91,22 @@ Trace приходит через stdin:
 Без флага capacity ограничивает только residents, а shadow history является
 дополнительной. `--capacity-includes-shadow` включает
 `CapacityAccounting::resident_and_shadow`: byte-бюджет одного уровня равен
-`configured_capacity * (sizeof(Key)+sizeof(Value))`. Фабрика бинарным поиском
+`configured_capacity * (sizeof(Key)+page_bytes)` для CLI. Фабрика бинарным поиском
 выбирает максимальное число residents, сохраняющее default shadow ratio и
-удовлетворяющее `R*(sizeof(Key)+sizeof(Value)) + S*sizeof(Key) <= budget`.
+удовлетворяющее `R*(sizeof(Key)+page_bytes) + S*sizeof(Key) <= budget`.
 Учитываются только логические payload, не overhead контейнеров. При capacity 1
 приоритет получает один resident и shadow отключается. LRU/LFU не меняются.
-`--value-bytes N` заменяет `sizeof(Value)` в этой формуле на заданный логический
-размер, не меняя фактический `DefaultValue` trace-runner; без него сохраняется
-текущий compile-time размер.
+`--value-bytes N` задаёт и реальный размер страницы, и логический размер для
+budget planner; без флага размер страницы равен 32 байтам. MockDatabase
+детерминированно генерирует страницу при каждом miss, без постоянного хранилища
+и без искусственной задержки. Overhead `std::vector` не учитывается.
 
-## Контракт `Cache<KeyType, ValueType>`
+## Общий контракт online-политик
+
+Базового класса и виртуальных методов нет: LRU/LFU/2Q/ARC/LIRS — самостоятельные
+типы с одинаковыми методами. `CacheVariant<Key, Value, Hash, KeyEqual>` —
+`std::variant` этих пяти типов (объекты хранятся по значению), а фабрика
+возвращает его по значению. Добавляя политику, обновлять variant и фабрику.
 
 `CacheEntry` владеет `key` и `value`. Реализации принимают также шаблонные
 `Hash` и `KeyEqual`; текущие структуры требуют хешируемый, сравнимый и
@@ -115,12 +123,13 @@ Trace приходит через stdin:
 - `extract(key)` — удаляет и возвращает resident entry или `nullopt`. Это
   техническое перемещение между уровнями: оно не должно создавать ghost/shadow
   history, как обычное вытеснение.
+- `contains(key)` — немутирующая проверка resident key через `find`.
 - `erase(key)` — невозвращающий wrapper над `extract`.
 - `clear()` очищает resident state, history и адаптивные счётчики.
 - `size()` считает только resident items и всегда `<= capacity()`.
-- `shadow_size()`/`shadow_capacity()` считают только non-resident keys. Базовая
-  реализация возвращает нули; политики с history переопределяют оба метода и
-  держат `shadow_size() <= shadow_capacity()`.
+- `shadow_size()`/`shadow_capacity()` считают только non-resident keys. LRU/LFU
+  возвращают нули; политики с history держат
+  `shadow_size() <= shadow_capacity()`.
 - Указатели из `find()` действуют только до следующей мутирующей операции.
 
 Индекс и списки одной политики должны всегда изменяться согласованно. Значение
@@ -128,32 +137,35 @@ Trace приходит через stdin:
 
 ## `CacheHierarchy`
 
-Конструктор принимает непустой `vector<unique_ptr<Cache<...>>>` без null-уровней;
-порядок — от L1 к последнему уровню. Пустой список или null вызывает
-`invalid_argument`. Уровни могут иметь разные policy и capacity, хотя CLI
-сейчас даёт им одинаковую capacity. Иерархия эксклюзивная: resident key должен
-находиться только на одном уровне.
+`CacheHierarchy<Key, Value, Loader>` принимает непустой
+`vector<CacheVariant<...>>` и функтор `slow_get_page(const Key&) -> Value` по значению;
+порядок — от L1 к последнему уровню. Пустой список вызывает
+`invalid_argument`; null-уровней у variant нет. Вызовы политик идут через
+`std::visit`: `const auto&` для чтения, `auto&` для изменений; каскад передаёт
+`CacheEntry` перемещением без копирования `Value`. Уровни могут иметь разные
+policy и capacity, хотя CLI сейчас даёт им одинаковую capacity. Иерархия
+эксклюзивная: resident key должен находиться только на одном уровне.
 
-- `access(key) -> ValueType*`: ищет сверху вниз. Miss возвращает `nullptr`, не
-  вставляет значение и не увеличивает `hits()`. Hit в L1 вызывает `touch`.
+- `access(key) -> CacheAccessResult<Value>`: ищет сверху вниз. При полном miss
+  вызывает loader ровно раз, вставляет value и возвращает `hit() == false`.
+  При capacity 0 результат сам владеет загруженным value. Hit в L1 вызывает `touch`.
   Hit ниже делает `extract`, вставляет сохранённый entry в L1 и каскадно
-  проталкивает вытеснения вниз. Возвращается сохранённое значение, а hits
-  увеличивается один раз.
+  проталкивает вытеснения вниз. `value()` возвращает ссылку на сохранённое
+  значение; `hits()` увеличивается один раз только на hit.
 - `insert(entry)`: явно заполняет L1. Перед этим удаляет тот же resident key из
   нижних уровней, чтобы сохранить exclusivity. Каждый возвращённый victim
   вставляется на следующий уровень; victim последнего уровня теряется.
 - `find(key)` (включая const overload) только ищет и не меняет порядок/частоты.
 - `hits()` — накопительный счётчик успешных `access`; reset/clear пока нет.
+- Исключение loader пробрасывается без вставки и без изменения счётчика hits.
+- Ссылка из `result.value()` на resident живёт до следующей мутации, а при
+  capacity 0 — до уничтожения самого результата.
 
 Обычный real-data flow:
 
 ```cpp
-if (auto* value = hierarchy.access(key)) {
-    return *value;
-}
-auto value = load_from_storage(key);
-hierarchy.insert({key, value});
-return value;
+auto result = hierarchy.access(key);
+consume(result.value()); // result.hit() показывает, понадобилась ли загрузка
 ```
 
 ## Реализованные политики
@@ -205,6 +217,13 @@ nodes без value. LIR hit переносится наверх S. HIR, повт
 становится LIR, а нижний LIR демотируется в HIR/Q; прочий HIR остаётся HIR.
 Victim обычно берётся с конца Q и остаётся shadow, только если ещё присутствует
 в S. Stack pruning заканчивает S на LIR и удаляет ненужную историю.
+Каждая позиция S имеет возрастающий `stack_epoch`; `shadow_index_` —
+`map<epoch, key>` только для non-resident HIR. При создании shadow запись
+сначала добавляется в индекс, затем при превышении лимита удаляется минимальный
+epoch (старейший по S); для лимита 0 shadow сразу удаляется. Resurrection,
+pruning и clear синхронно удаляют запись индекса. Обычное ограничение history
+стоит O(log S) вместо обхода стека; при переполнении 64-битного epoch стек
+однократно перенумеровывается.
 
 Default LIR quota: `capacity - max(1, capacity/100)`, то есть остаётся минимум
 один resident HIR slot. Default shadow limit равен capacity; второй аргумент
@@ -212,11 +231,14 @@ Default LIR quota: `capacity - max(1, capacity/100)`, то есть остаёт
 
 ### Belady (`cache.belady`)
 
-`BeladyCache<Key>` принимает capacity и весь trace, payload не хранит и
-`Cache` не реализует. `run()` сначала обратным проходом вычисляет следующее
-использование каждого запроса, затем держит residents в hash map и ordered set.
+`BeladyCache<Key, Value, Loader, Hash, KeyEqual>` принимает capacity, весь trace
+и loader; в online `CacheVariant` не входит. `run()` сначала обратным проходом вычисляет
+следующее использование каждого запроса, затем держит residents в hash map и ordered set.
+На miss вызывает loader и хранит payload вместе с key, при capacity 0 вызывает
+loader на каждый запрос. Повторный `run()` заново проигрывает trace.
 При miss вытесняется key с самым далёким следующим использованием (`never` —
-самый выгодный victim). Результат — только hit count; сложность O(n log C).
+самый выгодный victim). Результат — только hit count; сложность алгоритма
+O(n log C) без учёта стоимости загрузки страниц.
 
 ## Factory и config
 
@@ -257,7 +279,7 @@ shadow ratio берётся через `Policy::default_shadow_capacity`, поэ
   одной 2Q/ARC/LIRS запускаются как `resident_only` и `resident_and_shadow`, а
   чистые LRU/LFU — только как `resident_only`; режим записывается в
   `capacity_mode` и входит в ключи агрегации/tie-break. `--value-bytes` принимает
-  один или несколько размеров (`current` означает `sizeof(DefaultValue)`),
+  один или несколько размеров (`current` означает 32 байта),
   добавляет эту размерность в задачи/агрегации и столбец `value_bytes`.
   `--config-names` ограничивает прогон точными относительными именами. Любой
   failed/ideal_failed run даёт exit 1.
@@ -274,15 +296,16 @@ shadow ratio берётся через `Policy::default_shadow_capacity`, поэ
 
 ## Как добавить или переписать online-политику
 
-1. Создать `src/<name>.cppm`, импортировать `cache`, унаследоваться от
-   `Cache<Key, Value>` и реализовать весь контракт, включая const `find`, zero
-   capacity, обновление существующего key и безопасный `extract`.
+1. Создать `src/<name>.cppm`, импортировать `cache`, реализовать общий контракт
+   без наследования, включая const `find`, zero capacity, обновление
+   существующего key и безопасный `extract`.
 2. Для списков плюс hash index явно поддерживать валидность итераторов после
    каждого insert/touch/extract/clear. Если есть ghosts, хранить там только keys
    и соблюдать shadow limit, включая limit 0; предоставить статический
    `default_shadow_capacity`, который сможет использовать capacity planner.
-3. Добавить import/ветку в `factory.cppm`, имя в `SUPPORTED_POLICIES` генератора
-   конфигов, module interface в CMake и `<name>_test.cpp` в tests/CMakeLists.
+3. Добавить тип/import в `cache_variant.cppm`, ветку в `factory.cppm`, имя в
+   `SUPPORTED_POLICIES` генератора конфигов, module interface в CMake и
+   `<name>_test.cpp` в tests/CMakeLists.
 4. Минимальные тесты: constructors/defaults, victim/order, повторный hit,
    payload update, отсутствующий key, `find` без изменения policy, `clear`,
    extract, capacity 0/1, move-only Value и custom Hash/Key; для history-policy
@@ -302,9 +325,8 @@ shadow ratio берётся через `Policy::default_shadow_capacity`, поэ
 - Расширить формат config до параметров и, вероятно, отдельных capacities на
   уровень. Сейчас он задаёт только список policies, а CLI одинаково делит
   capacity по уровням.
-- Для прикладного key-value использования поверх уже разделённых
-  `access(key)`/`insert(entry)` можно добавить `get_or_load`, но loader обязан
-  вызываться только на miss. Не возвращать старый объединённый `access(entry)`.
+- Явный `insert(entry)` остаётся для предварительного заполнения/замены без
+  обращения к loader; обычный flow использует загружающий `access(key)`.
 - Иерархия пока отбрасывает victim последнего уровня, не возвращает per-level
   metrics и не имеет reset/clear. Менять это нужно отдельным явным контрактом,
   не скрытой побочной семантикой существующих методов.

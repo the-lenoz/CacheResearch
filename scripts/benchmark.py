@@ -249,7 +249,7 @@ def parse_arguments() -> argparse.Namespace:
         default=[None],
         metavar="BYTES",
         help=(
-            "logical value sizes to benchmark; use 'current' for sizeof(DefaultValue) "
+            "actual mock page sizes to benchmark; use 'current' for the 32-byte default "
             "(default: current)"
         ),
     )

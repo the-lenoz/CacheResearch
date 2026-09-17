@@ -16,16 +16,25 @@ import cache;
 
 export template <
     typename KeyType,
+    typename ValueType,
+    typename Loader,
     typename Hash = std::hash<KeyType>,
     typename KeyEqual = std::equal_to<KeyType>
 >
 class BeladyCache {
 public:
-    explicit BeladyCache(std::size_t capacity, std::vector<KeyType> trace)
-        : capacity_(capacity), trace_(std::move(trace)) {}
+    explicit BeladyCache(std::size_t capacity, std::vector<KeyType> trace, Loader slow_get_page)
+        : capacity_(capacity), trace_(std::move(trace)),
+          slow_get_page_(std::move(slow_get_page)) {}
 
     [[nodiscard]] std::size_t run() const {
-        if (capacity_ == 0 || trace_.empty()) {
+        if (trace_.empty()) {
+            return 0;
+        }
+        if (capacity_ == 0) {
+            for (const auto& key : trace_) {
+                static_cast<void>(std::invoke(slow_get_page_, key));
+            }
             return 0;
         }
 
@@ -59,10 +68,14 @@ public:
         };
 
         using Schedule = std::set<FutureUse, EarlierUse>;
+        struct Resident {
+            typename Schedule::iterator position;
+            ValueType value;
+        };
         Schedule schedule;
         std::unordered_map<
             KeyType,
-            typename Schedule::iterator,
+            Resident,
             Hash,
             KeyEqual
         > resident;
@@ -74,8 +87,8 @@ public:
             const auto found = resident.find(trace_[index]);
             if (found != resident.end()) {
                 ++hit_count;
-                schedule.erase(found->second);
-                found->second = schedule.emplace(FutureUse{
+                schedule.erase(found->second.position);
+                found->second.position = schedule.emplace(FutureUse{
                     next_occurrence[index],
                     index,
                     trace_[index]
@@ -83,6 +96,7 @@ public:
                 continue;
             }
 
+            ValueType loaded = std::invoke(slow_get_page_, trace_[index]);
             if (resident.size() == capacity_) {
                 const auto victim = std::prev(schedule.end());
                 resident.erase(victim->key);
@@ -94,7 +108,7 @@ public:
                 index,
                 trace_[index]
             }).first;
-            resident.emplace(trace_[index], position);
+            resident.emplace(trace_[index], Resident{position, std::move(loaded)});
         }
 
         return hit_count;
@@ -103,4 +117,5 @@ public:
 private:
     std::size_t capacity_;
     std::vector<KeyType> trace_;
+    mutable Loader slow_get_page_;
 };

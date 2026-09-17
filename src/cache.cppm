@@ -3,12 +3,12 @@ module;
 #include <cstddef>
 #include <optional>
 #include <utility>
-#include <variant>
+#include <vector>
 
 export module cache;
 
 export using DefaultKey = int;
-export using DefaultValue = std::monostate;
+export using DefaultValue = std::vector<std::byte>;
 
 export template <typename KeyType, typename ValueType>
 struct CacheEntry {
@@ -16,40 +16,27 @@ struct CacheEntry {
     ValueType value;
 };
 
-export template <typename KeyType, typename ValueType>
-class Cache {
+export template <typename ValueType>
+class CacheAccessResult {
 public:
-    using key_type = KeyType;
-    using value_type = ValueType;
-    using entry_type = CacheEntry<key_type, value_type>;
+    CacheAccessResult(bool hit, ValueType* cached)
+        : hit_(hit), cached_(cached) {}
 
-    virtual ~Cache() = default;
+    explicit CacheAccessResult(ValueType uncached)
+        : hit_(false), uncached_(std::move(uncached)) {}
 
-    [[nodiscard]] virtual value_type* find(const key_type& key) = 0;
-    [[nodiscard]] virtual const value_type* find(const key_type& key) const = 0;
-    virtual void touch(const key_type& key) = 0;
+    [[nodiscard]] bool hit() const { return hit_; }
 
-    [[nodiscard]] virtual std::optional<entry_type> insert(entry_type entry) = 0;
-    [[nodiscard]] virtual std::optional<entry_type> extract(const key_type& key) = 0;
-
-    virtual void clear() = 0;
-
-    [[nodiscard]] virtual std::size_t size() const = 0;
-    [[nodiscard]] virtual std::size_t capacity() const = 0;
-
-    [[nodiscard]] virtual std::size_t shadow_size() const {
-        return 0;
+    [[nodiscard]] ValueType& value() {
+        return uncached_ ? *uncached_ : *cached_;
     }
 
-    [[nodiscard]] virtual std::size_t shadow_capacity() const {
-        return 0;
+    [[nodiscard]] const ValueType& value() const {
+        return uncached_ ? *uncached_ : *cached_;
     }
 
-    [[nodiscard]] bool contains(const key_type& key) const {
-        return find(key) != nullptr;
-    }
-
-    void erase(const key_type& key) {
-        static_cast<void>(extract(key));
-    }
+private:
+    bool hit_;
+    ValueType* cached_ = nullptr;
+    std::optional<ValueType> uncached_;
 };
